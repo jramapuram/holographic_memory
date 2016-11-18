@@ -10,10 +10,9 @@ class HolographicMemory:
         if seed is None:
             seed = np.random.randint(0, 9999)
 
-        # Perm dimensions are: [num_models x num_features x num_features]
-        # self.perms = tf.Variable(tf.pack([tf.complex(self.create_permutation_matrix(input_size / 2, seed+i),
-        #                                              self.create_permutation_matrix(input_size / 2, 99*seed+i)) # XXX
-        #                                   for i in range(num_models)], axis=0), trainable=False)
+        # Perm dimensions are: num_models * [num_features x num_features]
+        # Variables are used to store the results of the random values
+        # as they need to be the same during recovery
         self.perms = [tf.Variable(self.create_permutation_matrix(input_size, seed+i), trainable=False)
                       for i in range(num_models)]
 
@@ -40,37 +39,13 @@ class HolographicMemory:
     '''
     @staticmethod
     def circ_conv1d(X, keys, conj=False):
-        # return tf.nn.conv1d(tf.reshape(X, xshp + [1]),
-        #                     tf.reshape(keys, [rshp[1], rshp[0], 1]),
-        #                     stride=1,
-        #                     padding='SAME')
-        # xcplx = HolographicMemory.split_to_complex(X)
-        # kcplx = HolographicMemory.split_to_complex(keys)
-        # fftx = [tf.fft(xcplx)]
-        # fftk = tf.fft(kcplx)
         fftx = tf.fft(HolographicMemory.split_to_complex(X))
         fftk = [tf.fft(HolographicMemory.split_to_complex(k)) for k in keys]
         if conj:
             fftk = [tf.conj(k) for k in fftk]
 
-        print 'fx = ', fftx.get_shape().as_list()
-        print 'fk = ', fftk[0].get_shape().as_list()
-
-        # xshp = fftx.get_shape().as_list()
-        # kshp = fftk.get_shape().as_list()
-        # print 'xshp = ', xshp
-        # print 'kshp = ', kshp
-
-        # for each row k in K and X we multiply them in freq and invert via ifft
-        # fftmul = tf.concat(0, [tf.expand_dims(tf.reduce_sum(tf.ifft(tf.mul(fk, fftx)), 0), 0)
-        #                        for fk in tf.split(0, fftk.get_shape().as_list()[0], fftk)])
-
-        print 'single mul size = ', tf.ifft(tf.mul(fftk[0], fftx)).get_shape().as_list()
-        # fftmul = tf.concat(0, [tf.expand_dims(tf.ifft(tf.mul(fk, fftx)), axis=0)
-        #                        for fk in fftk])
         fftmul = tf.concat(0, [HolographicMemory.unsplit_from_complex(tf.ifft(tf.mul(fk, fftx)))
                                for fk in fftk])
-        print 'fftmul shp = ', fftmul.get_shape().as_list()
         return fftmul
 
     '''
@@ -79,13 +54,6 @@ class HolographicMemory:
     K: [num_models, num_features]
     P: [num_models, feature_size, feature_size]
     '''
-    # @staticmethod
-    # def perm_keys(K, P):
-    #     #print 'k dims = ', K.get_shape().as_list()
-    #     #print 'p dims = ', P.get_shape().as_list()
-    #     val = tf.batch_matmul(tf.expand_dims(K, [2]), P, adj_x=True)
-    #     #print 'mm result = ', val.get_shape().as_list()
-    #     return tf.squeeze(val, [1])
     @staticmethod
     def perm_keys(K, P):
         return [tf.matmul(k, p) for k,p in zip(K, P)]
