@@ -22,12 +22,51 @@ class HolographicMemory:
     def update_hebb_weights(self, A, x, gamma=0.9):
         return gamma*A + tf.matmul(tf.transpose(x), x)
 
+
     '''
-    Helper to do sqrt(sum(re(x_i)^2 + imag(x_i)^2))
+    Get complex mod of a real vector
     '''
     @staticmethod
-    def complex_mod(x):
-        return tf.abs(tf.sqrt(tf.reduce_sum(tf.square(tf.real(x)) + tf.square(tf.imag(x)))))
+    def complex_mod_of_real(x):
+        xshp = x.get_shape().as_list()
+        assert xshp[1] % 2 == 0
+        xcplx = tf.complex(x[:, 0:xshp[1]/2], x[:, xshp[1]/2:])
+        return tf.abs(xcplx)
+
+    '''
+    Helper to validate that all the keys have complex mod of 1.0
+    '''
+    def verify_key_mod(self, keys, print_l2=False):
+        ops = []
+        for k in [HolographicMemory.complex_mod_of_real(k) for k in keys]:
+            ops.append(tf.nn.l2_loss(k - tf.ones_like(k)))
+
+        keys_l2 = self.sess.run(ops)
+        for l2, k in zip(keys_l2, keys):
+            assert l2 < 1e-9, "key [%s] is not normalized, l2 = %f \n%s" \
+                % (k, l2, str(self.sess.run(k)))
+            if print_l2:
+                print 'l2 = ', l2
+
+        print '|keys| ~= 1.0: verified'
+
+
+    '''
+    Normalizes real valued keys to have complex abs of 1.0
+
+    keys: f32/f64 list of keys of [1, input_size]
+
+    Returns: list of [1, input_size] f32/f64
+    '''
+    @staticmethod
+    def normalize_real_by_complex_abs(keys):
+        assert len(keys) > 0
+        input_size = keys[0].get_shape().as_list()[1]
+        assert input_size % 2 == 0, "input_size [%d] not divisible by 2" % input_size
+        keys_mag = [tf.sqrt(tf.square(k[:, 0:input_size/2])
+                            + tf.square(k[:, input_size/2:])) for k in keys]
+        keys_mag = [tf.concat(1, [km, km]) for km in keys_mag]
+        return [k / (km + 1e-10) for k, km in zip(keys, keys_mag)]
 
     '''
     Accepts the already permuted keys and the data and encodes them
@@ -39,12 +78,15 @@ class HolographicMemory:
     '''
     @staticmethod
     def circ_conv1d(X, keys, conj=False):
-        fftx = tf.fft(HolographicMemory.split_to_complex(X))
+        xnorm = [X] #HolographicMemory.normalize_real_by_complex_abs([X])
+        fftx = tf.fft(HolographicMemory.split_to_complex(xnorm[0]))
         fftk = [tf.fft(HolographicMemory.split_to_complex(k)) for k in keys]
         if conj:
             fftk = [tf.conj(k) for k in fftk]
 
-        fftmul = tf.concat(0, [HolographicMemory.unsplit_from_complex(tf.ifft(tf.mul(fk, fftx)))
+        print 'fftx : ', fftx.get_shape().as_list(), ' | fftk : ', len(fftk), \
+            ' x ', fftk[0].get_shape().as_list()
+        fftmul = tf.concat(0, [tf.expand_dims(tf.reduce_sum(HolographicMemory.unsplit_from_complex(tf.ifft(tf.mul(fk, fftx))), 0), 0)
                                for fk in fftk])
         return fftmul
 
@@ -57,6 +99,7 @@ class HolographicMemory:
     @staticmethod
     def perm_keys(K, P):
         return [tf.matmul(k, p) for k,p in zip(K, P)]
+
 
     '''
     pads [batch, feature_size] --> [batch, feature_size + num_pad]
@@ -123,7 +166,7 @@ class HolographicMemory:
     '''
     def decode(self, memories, keys):
         permed_keys = self.perm_keys(keys, self.perms)
-        return self.circ_conv1d(memories, permed_keys, conj=True)
+        return tf.reduce_mean(self.circ_conv1d(memories, permed_keys, conj=True), 0)
 
     '''
     Helper to create an [input_size, input_size] random permutation matrix
@@ -147,7 +190,6 @@ class HolographicMemory:
     @staticmethod
     def split_to_complex(x):
         xshp = x.get_shape().as_list()
-        print 'split to complex shp = ', xshp
         if len(xshp) == 2:
             assert xshp[1] % 2 == 0, \
                 "Vector is not evenly divisible into complex: %d" % xshp[1]
