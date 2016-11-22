@@ -50,7 +50,6 @@ class HolographicMemory:
 
         print '|keys| ~= 1.0: verified'
 
-
     '''
     Normalizes real valued keys to have complex abs of 1.0
 
@@ -68,6 +67,21 @@ class HolographicMemory:
         keys_mag = [tf.concat(1, [km, km]) for km in keys_mag]
         return [k / (km + 1e-10) for k, km in zip(keys, keys_mag)]
 
+    # @staticmethod
+    # def conj_real_by_complex(keys):
+    #     assert len(keys) > 0
+    #     input_size = keys[0].get_shape().as_list()[1]
+    #     assert input_size % 2 == 0, "input_size [%d] not divisible by 2" % input_size
+    #     return [tf.concat(1, [k[:, 0:input_size/2], -1*k[:, input_size/2:]]) for k in keys]
+    @staticmethod
+    def conj_real_by_complex(keys):
+        assert len(keys) > 0
+        input_size = keys[0].get_shape().as_list()[1]
+        assert input_size % 2 == 0, "input_size [%d] not divisible by 2" % input_size
+        #indexes = [0] + [i for i in range(input_size-1, 0, -1)]
+        indexes = tf.concat(0, [tf.constant([0]), tf.range(input_size-1, 0, -1)])
+        return [tf.expand_dims(tf.gather(tf.squeeze(k, axis=[0]), indexes), 0) for k in keys]
+
     '''
     Accepts the already permuted keys and the data and encodes them
 
@@ -76,19 +90,45 @@ class HolographicMemory:
 
     Returns: [num_models, num_features]
     '''
+    # @staticmethod
+    # def circ_conv1d(X, keys, conj=False):
+    #     xnorm = [X] #HolographicMemory.normalize_real_by_complex_abs([X])
+    #     xshp = X.get_shape().as_list()
+    #     fftx = tf.fft(HolographicMemory.split_to_complex(xnorm[0]))
+    #     fftk = [tf.fft(HolographicMemory.split_to_complex(k)) for k in keys]
+    #     if conj:
+    #         fftk = [tf.conj(k) for k in fftk]
+
+    #     print 'fftx : ', fftx.get_shape().as_list(), ' | fftk : ', len(fftk), \
+    #         ' x ', fftk[0].get_shape().as_list()
+
+    #     fftmul = tf.concat(0, [tf.expand_dims(tf.reduce_sum(HolographicMemory.unsplit_from_complex(tf.ifft(tf.mul(fk, fftx))), 0), 0)
+    #                            for fk in fftk])
+    #     C = [tf.expand_dims(tf.reduce_sum(fftmul[begin:end], 0), 0)
+    #          for begin, end in zip(range(0, len(keys), xshp[0]),
+    #                                range(xshp[0], len(keys)+1, xshp[0]))]
+    #     print 'C : ', len(C), C[0].get_shape().as_list()
+    #     return tf.concat(0, C)
+
     @staticmethod
     def circ_conv1d(X, keys, conj=False):
-        xnorm = [X] #HolographicMemory.normalize_real_by_complex_abs([X])
-        fftx = tf.fft(HolographicMemory.split_to_complex(xnorm[0]))
-        fftk = [tf.fft(HolographicMemory.split_to_complex(k)) for k in keys]
+        assert len(keys) > 0
         if conj:
-            fftk = [tf.conj(k) for k in fftk]
+            keys = HolographicMemory.conj_real_by_complex(keys)
 
-        print 'fftx : ', fftx.get_shape().as_list(), ' | fftk : ', len(fftk), \
-            ' x ', fftk[0].get_shape().as_list()
-        fftmul = tf.concat(0, [tf.expand_dims(tf.reduce_sum(HolographicMemory.unsplit_from_complex(tf.ifft(tf.mul(fk, fftx))), 0), 0)
-                               for fk in fftk])
-        return fftmul
+        xshp = X.get_shape().as_list()
+        kshp = keys[0].get_shape().as_list()
+        print 'x : ', xshp, ' | keys : ', len(keys), ' x ', kshp
+
+        conv = [tf.nn.conv1d(tf.reshape(X, xshp + [1]),
+                             tf.reshape(k, [kshp[1], kshp[0], 1]),
+                             stride=1,
+                             padding='SAME') for k in keys]
+        print 'conv = ', len(conv), ' x ', conv[0].get_shape().as_list()
+
+        C = tf.squeeze(tf.concat(0, conv), axis=[2])
+        print 'C: ', C.get_shape().as_list()
+        return C
 
     '''
     Helper to return the product of the permutation matrices and the keys
@@ -98,8 +138,8 @@ class HolographicMemory:
     '''
     @staticmethod
     def perm_keys(K, P):
-        return [tf.matmul(k, p) for k,p in zip(K, P)]
-
+        #return [tf.matmul(k, p) for k,p in zip(K, P)]
+        return [tf.matmul(k, p) for p in P for k in K]
 
     '''
     pads [batch, feature_size] --> [batch, feature_size + num_pad]
@@ -116,33 +156,6 @@ class HolographicMemory:
         return tf.concat(index_to_pad, [x, zeros])
 
     '''
-    returns [batch, in_width, in_channels]
-    '''
-    @staticmethod
-    def _reshape_input(x):
-        x_shp = x.get_shape().as_list()
-        if len(x_shp) == 2:
-            return tf.reshape(x, [x_shp[0], x_shp[1], 1])
-        elif len(x_shp) == 1:
-            return x
-        else:
-            raise Exception("unepexted number of dimensions in input x: %d" % len(x_shp))
-
-    '''
-    returns [filter_width, in_channels, out_channels]
-    '''
-    @staticmethod
-    def _reshape_filter(v):
-        v_shp = v.get_shape().as_list()
-        if len(v_shp) == 2:
-            # #return tf.reshape(v, [v_shp[0], v_shp[1], out_channels])
-            # filters = tf.split(0, v_shp[0], v)
-            # return [tf.reshape(f, [v_shp[1], 1, 1]) for f in filters]
-            return tf.expand_dims(v, 2)
-        else:
-            return tf.reshape(v, [v_shp[0], 1, out_channels])
-
-    '''
     Encoders some keys and values together
 
     values: [batch_size, feature_size]
@@ -153,6 +166,7 @@ class HolographicMemory:
     '''
     def encode(self, v, keys):
         permed_keys = self.perm_keys(keys, self.perms)
+        print 'enc_perms =', len(permed_keys), 'x', permed_keys[0].get_shape().as_list()
         return self.circ_conv1d(v, permed_keys)
 
     '''
@@ -166,7 +180,7 @@ class HolographicMemory:
     '''
     def decode(self, memories, keys):
         permed_keys = self.perm_keys(keys, self.perms)
-        return tf.reduce_mean(self.circ_conv1d(memories, permed_keys, conj=True), 0)
+        return self.circ_conv1d(memories, permed_keys, conj=True)
 
     '''
     Helper to create an [input_size, input_size] random permutation matrix
