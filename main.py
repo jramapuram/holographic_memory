@@ -11,7 +11,7 @@ from utils import one_hot
 from sklearn.preprocessing import normalize
 
 #### Config ####
-num_models = 3
+num_models = 1
 batch_size = 1
 input_size = 784
 SEED = 1227
@@ -29,21 +29,21 @@ def gen_unif_keys(input_size, batch_size):
     assert input_size % 2 == 0
     keys = [tf.Variable(tf.random_uniform([1, input_size],
                                           seed=SEED*17+2*i), #XXX
-                        trainable=False) for i in range(batch_size)]
+                        trainable=False, name="key_%d"%i) for i in range(batch_size)]
     return keys
 
 def gen_std_keys(input_size, batch_size):
     assert input_size % 2 == 0
-    keys = [tf.Variable(tf.random_normal([1, input_size],
+    keys = [tf.Variable(tf.nn.l2_normalize(tf.random_normal([1, input_size],
                                          seed=SEED*17+2*i, #XXX
-                                         stddev=1.0/batch_size),
-                        trainable=False) for i in range(batch_size)]
+                                                            stddev=1.0/batch_size), 1),
+                        trainable=False, name="key_%d"%i) for i in range(batch_size)]
     return keys
 
 
 def gen_onehot_keys(input_size, batch_size):
     keys = [tf.Variable(tf.constant(one_hot(input_size, [i]), dtype=tf.float32),
-                        trainable=False) for i in range(batch_size)]
+                        trainable=False, name="key_%d"%i) for i in range(batch_size)]
     return keys
 
 def generate_keys(keytype, input_size, batch_size):
@@ -78,8 +78,10 @@ with tf.device("/gpu:0"):
         #     1) Randomly Generated [pseudokeys=True]
         #     2) From a noisy version of the data
         if pseudokeys:
+            print 'generating pseudokeys...'
             keys = generate_keys(keytype, input_size, batch_size)
         else:
+            print 'utilizing real keys with N(0,I)...'
             keys = [v + tf.random_normal(v.get_shape().as_list())
                     for v in tf.split(0, minibatch.shape[0], value)]
 
@@ -106,7 +108,7 @@ with tf.device("/gpu:0"):
 
         # recover value
         print 'keys = ', len(keys), ' x ', keys[0].get_shape().as_list()
-        values_recovered = tf.reduce_sum(memory.decode(memories, [keys[0]]), 0)
+        values_recovered = memory.decode(memories, [keys[0]])
         values_recovered_host = sess.run(values_recovered)
         #print 'recovered value [%s] = %s' % (values_recovered_host.shape, normalize(values_recovered_host))
         print 'recovered value shape = ', values_recovered_host.shape
