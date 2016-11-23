@@ -107,7 +107,7 @@ with tf.device("/gpu:0"):
         #print 'em = ', memories_host
 
         # recover value
-        values_recovered = tf.reduce_sum(memory.decode(memories, [keys[1]]), 0)
+        values_recovered = tf.reduce_sum(memory.decode(memories, [keys[0]]), 0)
         values_recovered_host = sess.run(values_recovered)
         #print 'recovered value [%s] = %s' % (values_recovered_host.shape, normalize(values_recovered_host))
         print 'recovered value shape = ', values_recovered_host.shape
