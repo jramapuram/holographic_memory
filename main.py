@@ -11,10 +11,10 @@ from utils import one_hot
 from sklearn.preprocessing import normalize
 
 #### Config ####
-num_models = 1
-batch_size = 1
+num_models = 3
+batch_size = 2
 input_size = 784
-SEED = 1227
+SEED = 1337
 keytype = 'std'
 pseudokeys = True
 normalize_keys = False
@@ -28,15 +28,15 @@ def save_fig(m, name):
 def gen_unif_keys(input_size, batch_size):
     assert input_size % 2 == 0
     keys = [tf.Variable(tf.random_uniform([1, input_size],
-                                          seed=SEED*17+2*i), #XXX
+                                          seed=SEED*17+2*i if SEED else None), #XXX
                         trainable=False, name="key_%d"%i) for i in range(batch_size)]
     return keys
 
 def gen_std_keys(input_size, batch_size):
     assert input_size % 2 == 0
-    keys = [tf.Variable(tf.nn.l2_normalize(tf.random_normal([1, input_size],
-                                         seed=SEED*17+2*i, #XXX
-                                                            stddev=1.0/batch_size), 1),
+    keys = [tf.Variable(tf.random_normal([1, input_size],
+                                         seed=SEED*17+2*i if SEED else None, #XXX
+                                         stddev=1.0/batch_size),
                         trainable=False, name="key_%d"%i) for i in range(batch_size)]
     return keys
 
@@ -65,7 +65,7 @@ with tf.device("/gpu:0"):
     with tf.Session(config=tf.ConfigProto(allow_soft_placement=False,
                                           gpu_options=gpu_options)) as sess:
         # initialize our holographic memory
-        memory = HolographicMemory(sess, input_size, num_models, seed=SEED)
+        memory = HolographicMemory(sess, input_size, batch_size, num_models, seed=SEED)
 
         # Generate some random values & save a test sample
         # zero = MNIST_Number(0, full_mnist)
@@ -107,8 +107,7 @@ with tf.device("/gpu:0"):
         #print 'em = ', memories_host
 
         # recover value
-        print 'keys = ', len(keys), ' x ', keys[0].get_shape().as_list()
-        values_recovered = memory.decode(memories, [keys[0]])
+        values_recovered = tf.reduce_sum(memory.decode(memories, [keys[1]]), 0)
         values_recovered_host = sess.run(values_recovered)
         #print 'recovered value [%s] = %s' % (values_recovered_host.shape, normalize(values_recovered_host))
         print 'recovered value shape = ', values_recovered_host.shape
