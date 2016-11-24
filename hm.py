@@ -95,10 +95,13 @@ class HolographicMemory:
         # Split X's batches out
         xsplits = tf.split(0, xshp[0] * num_copies, tf.concat(0, [X for _ in range(num_copies)]))
         xspshp = xsplits[0].get_shape().as_list()
-        print 'xsplits : ', xspshp
+        print 'xsplits : ', len(xsplits), 'x', xspshp
 
         # The following computes all of the values individually, i.e
         # [P0k0 * x0, P0k1 * x1 + ...]
+        # Input  : [batch, in_width, in_channels]
+        # Filter : [filter_width, in_channels, out_channels]
+        # Result : [batch, out_width, out_channels]
         conv = [tf.expand_dims(tf.squeeze(tf.nn.conv1d(tf.reshape(x, [xspshp[0], xspshp[1], 1]),
                                                        tf.reshape(k, [kshp[1], kshp[0], 1]),
                                                        stride=1,
@@ -119,6 +122,47 @@ class HolographicMemory:
         # return a single concatenated  tensor:
         # C = [c0; c1; ...]
         return tf.concat(0, conv_concat)
+
+    # def circ_conv1d(X, keys, batch_size, num_copies, conj=False):
+    #     assert len(keys) > 0
+    #     if conj:
+    #         keys = HolographicMemory.conj_real_by_complex(keys)
+
+    #     #X = tf.concat(0, [X for _ in range(num_copies)])
+    #     xshp = X.get_shape().as_list()
+    #     kshp = keys[0].get_shape().as_list()
+    #     print 'x : ', xshp, ' | keys : ', len(keys), ' x ', kshp
+
+    #     keys_concat = [tf.concat(0, keys[begin:end])
+    #                    for begin, end in zip(range(0, len(keys), batch_size),
+    #                                          range(batch_size, len(keys)+1, batch_size))]
+    #     print 'kc = ', len(keys_concat), 'x', keys_concat[0].get_shape().as_list()
+
+    #     # Input:  [batch, in_height, in_width, in_channels]
+    #     # Filter: [filter_height, filter_width, in_channels, out_channels]
+    #     conv = [tf.expand_dims(tf.reduce_sum(tf.squeeze(tf.nn.conv2d(tf.reshape(X, [1, xshp[0], xshp[1], 1]),
+    #                                                                  tf.reshape(k, [batch_size, kshp[1], 1, 1]),
+    #                                                                  strides=[1,1,1,1],
+    #                                                                  padding='SAME'),
+    #                                                     [0, 3]), 0), 0) for k in keys_concat]
+    #     print 'full conv list = ', len(conv), ' x ', conv[0].get_shape().as_list()
+    #     # cshp = conv.get_shape().as_list()
+    #     # print 'full conv list = ', cshp
+
+    #     # # We now aggregate them as follows:
+    #     # # c0 = P0k0 * x0 + P0k1 * x1 + ... P0k_batch * x_batch
+    #     # # and do that for all the c's and store separately
+    #     # #batch_size = xshp[0]
+    #     # conv_concat = [tf.expand_dims(tf.squeeze(tf.reduce_sum(conv[begin:end], 0)), 0)
+    #     #                for begin, end in zip(range(0, cshp[0], batch_size),
+    #     #                                      range(batch_size, cshp[0]+1, batch_size))]
+
+
+    #     # print 'conv concat = ', len(conv_concat), ' x ', conv_concat[0].get_shape().as_list()
+
+    #     # # return a single concatenated  tensor:
+    #     # # C = [c0; c1; ...]
+    #     return tf.concat(0, conv)
 
 
 
