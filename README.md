@@ -15,7 +15,7 @@ python run_mnist_example.py # See file for possible flags
 ```
 
 ### Flags
-Flags are defined [here](https://github.com/jramapuram/blob/master/run_mnist_example.py#L16-L27) for the mnist example.
+Flags are defined [here](https://github.com/jramapuram/holographic_memory/blob/master/run_mnist_example.py#L17-L27) for the mnist example.
 
 ## Input Images
 Listed below are the original images from a minibatch size of 3
