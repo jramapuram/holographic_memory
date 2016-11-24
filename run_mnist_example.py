@@ -15,8 +15,8 @@ from sklearn.preprocessing import normalize
 #                             Configuration parameters & Defaults                               #
 #################################################################################################
 flags = tf.flags
-flags.DEFINE_integer("num_copies", 20, "Number of copies to make.")
-flags.DEFINE_integer("batch_size", 3, "Number of samples to use in minibatch")
+flags.DEFINE_integer("num_copies", 3, "Number of copies to make.")
+flags.DEFINE_integer("batch_size", 2, "Number of samples to use in minibatch")
 flags.DEFINE_integer("seed", None, "Fixed seed to get reproducible results.")
 flags.DEFINE_string("keytype", "normal", "Use N(0, I) keys")
 flags.DEFINE_bool("pseudokeys", 1, "Use synthetically generated keys or [data + error] as keys")
@@ -91,7 +91,7 @@ def main():
                 print 'generating pseudokeys...'
                 keys = generate_keys(FLAGS.keytype, input_size, FLAGS.batch_size, FLAGS.seed)
             else:
-                print 'utilizing real keys with N(0,I)...'
+                print 'utilizing real data + N(0,I) as keys...'
                 keys = [v + tf.random_normal(v.get_shape().as_list())
                         for v in tf.split(0, minibatch.shape[0], value)]
 
@@ -101,7 +101,7 @@ def main():
 
             # Normalize our keys using the l2 norm
             if FLAGS.l2_normalize_keys:
-                keys = [tf.nn.l2_normalize(k) for k in keys]
+                keys = [tf.nn.l2_normalize(k, 1) for k in keys]
 
             sess.run(tf.initialize_all_variables())
 

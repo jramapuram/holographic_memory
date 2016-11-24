@@ -134,8 +134,8 @@ class HolographicMemory:
     #     print 'x : ', xshp, ' | keys : ', len(keys), ' x ', kshp
 
     #     keys_concat = [tf.concat(0, keys[begin:end])
-    #                    for begin, end in zip(range(0, len(keys), batch_size),
-    #                                          range(batch_size, len(keys)+1, batch_size))]
+    #                    for begin, end in zip(range(0, len(keys), min(batch_size, len(keys))),
+    #                                          range(min(batch_size, len(keys)), len(keys)+1, min(batch_size, len(keys))))]
     #     print 'kc = ', len(keys_concat), 'x', keys_concat[0].get_shape().as_list()
 
     #     # Input:  [batch, in_height, in_width, in_channels]
