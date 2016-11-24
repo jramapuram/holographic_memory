@@ -1,7 +1,7 @@
 # holographic_memory
 Implementation of [Holographic Reduced Representations](http://www.ijcai.org/Proceedings/91-1/Papers/006.pdf) in Tensorflow
 
-### Requirements
+## Requirements
 Code is currently for python2 and requires the following dependencies:
 
   - numpy
@@ -14,14 +14,19 @@ Code is currently for python2 and requires the following dependencies:
 python run_mnist_example.py # See file for possible flags
 ```
 
-#### Flags
-Flags are defined [here](https://github.com/jramapuram/blob/master/run_mnist_example.py#L16-L27) for the mnist example.
+### Flags
+Flags are defined [here](https://github.com/jramapuram/holographic_memory/blob/master/run_mnist_example.py#L17-L27) for the mnist example.
 
-### Input Image
+## Input Images
 Listed below are the original images from a minibatch size of 3
 
-![Original0](imgs/original_0.png)![Original1](imgs/original_1.png)![Original2](imgs/original_2.png)
+<img src="imgs/original_0.png" alt="original image 0" width="250">
+<img src="imgs/original_1.png" alt="original image 1" width="250">
+<img src="imgs/original_2.png" alt="original image 2" width="250">
 
-### Reconstruction
-Listed below is the reconstruction of the original 3 images using a memory of 20 traces
-![Reconstruction0](imgs/recovered_0.png)![Reconstruction1](imgs/recovered_1.png)![Reconstruction2](imgs/recovered_2.png)
+## Reconstruction
+Listed below is the reconstruction of the original 3 images using a memory of 20 traces:
+
+<img src="imgs/recovered_0.png" alt="recovered image 0" width="250">
+<img src="imgs/recovered_1.png" alt="recovered image 1" width="250">
+<img src="imgs/recovered_2.png" alt="recovered image 2" width="250">
