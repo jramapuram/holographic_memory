@@ -113,8 +113,8 @@ class HolographicMemory:
         # and do that for all the c's and store separately
         #batch_size = xshp[0]
         conv_concat = [tf.expand_dims(tf.reduce_sum(tf.concat(0, conv[begin:end]), 0), 0)
-                       for begin, end in zip(range(0, len(conv), batch_size),
-                                             range(batch_size, len(conv)+1, batch_size))]
+                       for begin, end in zip(range(0, len(conv), min(batch_size, len(conv))),
+                                             range(min(batch_size, len(conv)), len(conv)+1, min(batch_size, len(conv))))]
 
 
         print 'conv concat = ', len(conv_concat), ' x ', conv_concat[0].get_shape().as_list()
