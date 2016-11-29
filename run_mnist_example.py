@@ -32,6 +32,7 @@ def save_fig(m, name):
     plt.figure()
     plt.imshow(m.reshape(28, 28))
     plt.savefig(name, bbox_inches='tight')
+    plt.close()
 
 def gen_unif_keys(input_size, batch_size, seed):
     assert input_size % 2 == 0
@@ -127,7 +128,7 @@ def main():
 
             for val, j in zip(values_recovered_host, range(len(values_recovered_host))):
                 save_fig(val, "imgs/recovered_%d.png"  % j)
-                #save_fig (normalize(val), "recovered_%d.png"  % j)
+                #save_fig (normalize(val, axis=0), "imgs/recovered_%d.png"  % j)
                 print 'recovered value shape = ', val.shape
                 #print 'recovered value [%s] = %s' % (val.shape, values_recovered_host)
 
