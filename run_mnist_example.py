@@ -9,7 +9,8 @@ import matplotlib.pyplot as plt
 from hm import HolographicMemory
 from mnist_number import MNIST_Number, full_mnist
 from utils import one_hot
-from sklearn.preprocessing import normalize
+#from sklearn.preprocessing import normalize
+from sklearn.preprocessing import MinMaxScaler
 
 #################################################################################################
 #                             Configuration parameters & Defaults                               #
@@ -20,7 +21,7 @@ flags.DEFINE_integer("batch_size", 2, "Number of samples to use in minibatch")
 flags.DEFINE_integer("seed", None, "Fixed seed to get reproducible results.")
 flags.DEFINE_string("keytype", "normal", "Use N(0, I) keys")
 flags.DEFINE_bool("pseudokeys", 1, "Use synthetically generated keys or [data + error] as keys")
-flags.DEFINE_bool("complex_normalize_keys", 0, "Normalize keys via complex mod.")
+flags.DEFINE_bool("complex_normalize", 0, "Normalize keys via complex mod.")
 flags.DEFINE_bool("l2_normalize_keys", 0, "Normalize keys via l2 norm.")
 flags.DEFINE_string("device", "/gpu:0", "Compute device.")
 flags.DEFINE_boolean("allow_soft_placement", False, "Soft device placement.")
@@ -49,6 +50,15 @@ def gen_std_keys(input_size, batch_size, seed):
                         trainable=False, name="key_%d"%i) for i in range(batch_size)]
     return keys
 
+def normalize(x):
+    if len(x.shape) == 2:
+        cleaned = (x - np.mean(x, axis=1)) / (np.std(x, axis=1) + 1e-9)
+    elif len(x.shape) == 1:
+        cleaned = (x - np.mean(x)) / (np.std(x) + 1e-9)
+    else:
+        raise Exception("Unknown shape provided")
+
+    return MinMaxScaler().fit_transform(x)
 
 def gen_onehot_keys(input_size, batch_size):
     keys = [tf.Variable(tf.constant(one_hot(input_size, [i]), dtype=tf.float32),
@@ -92,22 +102,26 @@ def main():
                 keys = generate_keys(FLAGS.keytype, input_size, FLAGS.batch_size, FLAGS.seed)
             else:
                 print 'utilizing real data + N(0,I) as keys...'
-                keys = [tf.add(v, tf.random_normal(v.get_shape().as_list()), name="keys_%d"%i)
+                keys = [tf.add(v, tf.random_normal(v.get_shape().as_list(), seed=FLAGS.seed*17+2*i), name="keys_%d"%i)
                         for v, i in zip(tf.split(0, minibatch.shape[0], value), range(minibatch.shape[0]))]
+                #keys = [normalize(k) for k in keys]
+                #keys = [tf.constant()]
 
             # Normalize our keys to mod 1 if specified
-            if FLAGS.complex_normalize_keys:
+            if FLAGS.complex_normalize:
+                print 'normalizing via complex abs..'
                 keys = HolographicMemory.normalize_real_by_complex_abs(keys)
 
             # Normalize our keys using the l2 norm
-            if FLAGS.l2_normalize_keys:
+            if FLAGS.l2_normalize_keys and not FLAGS.complex_normalize:
+                print 'normalizing via l2..'
                 keys = [tf.nn.l2_normalize(k, 1) for k in keys]
 
             sess.run(tf.initialize_all_variables())
 
             # do a little validation on the keys
-            if FLAGS.complex_normalize_keys and FLAGS.keytype != 'onehot':
-                memory.verify_key_mod(keys)
+            # if FLAGS.complex_normalize and FLAGS.keytype != 'onehot':
+            #     memory.verify_key_mod(keys)
 
             # Get some info on the original data
             print 'values to encode : ', str(minibatch.shape)
@@ -127,10 +141,10 @@ def main():
             values_recovered_host = sess.run(values_recovered)
 
             for val, j in zip(values_recovered_host, range(len(values_recovered_host))):
+                val = normalize(val)
                 save_fig(val, "imgs/recovered_%d.png"  % j)
-                #save_fig (normalize(val, axis=0), "imgs/recovered_%d.png"  % j)
-                print 'recovered value shape = ', val.shape
-                #print 'recovered value [%s] = %s\n' % (val.shape, val)
+                #print 'recovered value shape = ', val.shape
+                print 'recovered value [%s] = %s\n' % (val.shape, val)
 
 if __name__ == "__main__":
     # Create our image directories

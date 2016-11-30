@@ -12,6 +12,10 @@ class HolographicMemory:
         self.conv_func = HolographicMemory.fft_circ_conv1d if use_fft_method \
                          else HolographicMemory.circ_conv1d
 
+        self.values = tf.placeholder(tf.float32, shape=[batch_size, input_size], name="input_placeholder")
+        self.keys = tf.placeholder(tf.float32, shape=[num_models, input_size], name="key_placeholder")
+        self.memories = tf.placeholder(tf.float32, shape=[num_models, input_size], name="memory_placeholder")
+
         # Perm dimensions are: num_models * [num_features x num_features]
         # Variables are used to store the results of the random values
         # as they need to be the same during recovery
@@ -34,7 +38,8 @@ class HolographicMemory:
         xshp = x.get_shape().as_list()
         assert xshp[1] % 2 == 0
         xcplx = tf.complex(x[:, 0:xshp[1]/2], x[:, xshp[1]/2:])
-        return tf.abs(xcplx)
+        #return tf.abs(xcplx)
+        return tf.complex_abs(xcplx)
 
     '''
     Helper to validate that all the keys have complex mod of 1.0
@@ -65,8 +70,9 @@ class HolographicMemory:
         assert len(keys) > 0
         input_size = keys[0].get_shape().as_list()[1]
         assert input_size % 2 == 0, "input_size [%d] not divisible by 2" % input_size
-        keys_mag = [tf.sqrt(tf.square(k[:, 0:input_size/2])
-                            + tf.square(k[:, input_size/2:])) for k in keys]
+        keys_mag = [tf.maximum(tf.sqrt(tf.square(k[:, 0:input_size/2])
+                                   + tf.square(k[:, input_size/2:])),
+                           1.0) for k in keys]
         keys_mag = [tf.concat(1, [km, km]) for km in keys_mag]
         return [k / (km + 1e-10) for k, km in zip(keys, keys_mag)]
 
@@ -173,59 +179,6 @@ class HolographicMemory:
         # C = [c0; c1; ...]
         return tf.concat(0, conv_concat)
 
-    # def fft_circ_conv1d(X, keys, batch_size, num_copies, conj=False):
-    #     assert len(keys) > 0
-    #     if conj:
-    #         keys = HolographicMemory.conj_real_by_complex(keys)
-
-    #     X = HolographicMemory.split_to_complex(X)
-    #     xshp = X.get_shape().as_list()
-
-    #     # setup keys
-    #     keys_concat = [tf.concat(0, keys[begin:end], name='_'.join([k.name.replace(":0", "") for k in keys[begin:end]]))
-    #                    for begin, end in zip(range(0, len(keys), min(batch_size, len(keys))),
-    #                                          range(min(batch_size, len(keys)), len(keys)+1, min(batch_size, len(keys))))]
-    #     # xmid = xspshp[1] / 2
-    #     # kmid = kbshp[1] / 2
-    #     # cplxx = tf.fft(tf.complex(xsplits[:, 0:xmid], xsplits[:, xmid:]))
-    #     # cplxk = tf.fft(tf.complex(key_block[:, 0:kmid], key_block[:, kmid:]))
-    #     # print 'x = ', cplxx.get_shape().as_list(), ' | k = ', cplxk.get_shape().as_list()
-    #     # fft = tf.ifft(tf.mul(cplxk, cplxx))
-    #     # print 'fft = ', fft.get_shape().as_list()
-    #     # rec = tf.concat(1, [tf.real(fft), tf.imag(fft)])
-    #     # print 'rec = ', rec.get_shape().as_list()
-    #     # conv = tf.reshape(tf.concat(1, [tf.real(fft), tf.imag(fft)]), [-1, xshp[1]])
-
-    #     #keys_concat = tf.concat(0, keys)
-    #     #print 'keys0 : ', keys_concat.get_shape().as_list()
-    #     keys_concat = [HolographicMemory.split_to_complex(k) for k in keys_concat]
-    #     kcshp = keys_concat[0].get_shape().as_list()
-    #     print 'x : ', xshp, ' | keys : ', len(keys_concat), 'x', kcshp
-
-    #     test = [tf.ifft(tf.mul(tf.fft(k), tf.fft(X)))
-    #             # for begin, end in zip(range(0, kcshp[0], min(batch_size, len(keys))),
-    #             #                       range(min(batch_size, len(keys)), kcshp[0]+1, min(batch_size, len(keys))))]
-    #             for k in keys_concat]
-    #     print 'test = ', len(test), 'x', test[0].get_shape().as_list()
-
-    #     conv = [tf.expand_dims(tf.reduce_sum(tf.ifft(tf.mul(tf.fft(k), tf.fft(X))), 0), 0)
-    #             for k in keys_concat]
-    #             # for begin, end in zip(range(0, kcshp[0], min(batch_size, len(keys))),
-    #             #                       range(min(batch_size, len(keys)), kcshp[0]+1, min(batch_size, len(keys))))]
-    #     cshp = conv[0].get_shape().as_list()
-    #     print 'conv = ', len(conv), 'x', cshp
-
-    #     if conj:
-    #         result = [HolographicMemory.unsplit_from_complex_ir(c) for c in conv]
-    #     else:
-    #         result = [HolographicMemory.unsplit_from_complex_ri(c) for c in conv]
-    #     # result = [tf.expand_dims(tf.reduce_sum(r[begin:end], 0), 0)
-    #     #                          for begin, end in zip(range(0, len(conv), min(batch_size, len(conv))),
-    #     #                                                range(min(batch_size, len(conv)), len(conv)+1, min(batch_size, len(conv))))]
-    #     print 'result = ', len(result), 'x', result[0].get_shape().as_list()
-    #     return tf.concat(0, result)
-
-
     '''
     Helper to return the product of the permutation matrices and the keys
 
@@ -287,6 +240,7 @@ class HolographicMemory:
     '''
     @staticmethod
     def create_permutation_matrix(input_size, seed=None):
+        #return tf.random_shuffle(tf.eye(input_size), seed=seed)
         np.random.seed(seed)
         ind = np.arange(0, input_size)
         ind_shuffled = np.copy(ind)
@@ -327,4 +281,11 @@ class HolographicMemory:
     '''
     @staticmethod
     def unsplit_from_complex_ir(x):
+        #return tf.concat(1, [tf.imag(x), tf.abs(tf.real(x))])
         return tf.abs(tf.concat(1, [tf.imag(x), tf.real(x)]))
+
+        #mag = tf.maximum(1.0, tf.complex_abs(x))
+        #x = tf.complex(tf.real(x) / (mag + 1e-10), tf.imag(x) / (mag + 1e-10))
+
+        # real = tf.concat(1, [tf.imag(x), tf.real(x)])
+        # return tf.abs(HolographicMemory.normalize_real_by_complex_abs([real])[0])
