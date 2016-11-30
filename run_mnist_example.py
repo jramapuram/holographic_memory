@@ -130,7 +130,7 @@ def main():
                 save_fig(val, "imgs/recovered_%d.png"  % j)
                 #save_fig (normalize(val, axis=0), "imgs/recovered_%d.png"  % j)
                 print 'recovered value shape = ', val.shape
-                #print 'recovered value [%s] = %s' % (val.shape, values_recovered_host)
+                #print 'recovered value [%s] = %s\n' % (val.shape, val)
 
 if __name__ == "__main__":
     # Create our image directories
