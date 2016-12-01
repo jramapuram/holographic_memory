@@ -50,15 +50,15 @@ def gen_std_keys(input_size, batch_size, seed):
                         trainable=False, name="key_%d"%i) for i in range(batch_size)]
     return keys
 
-def normalize(x):
+def normalize(x, scale_range=True):
     if len(x.shape) == 2:
-        cleaned = (x - np.mean(x, axis=1)) / (np.std(x, axis=1) + 1e-9)
+        cleaned = (x - np.mean(x, axis=1)) / np.clip(np.std(x, axis=1), 1e-9, 1e25)
     elif len(x.shape) == 1:
-        cleaned = (x - np.mean(x)) / (np.std(x) + 1e-9)
+        cleaned = (x - np.mean(x)) / np.clip(np.std(x), 1e-9, 1e25)
     else:
         raise Exception("Unknown shape provided")
 
-    return MinMaxScaler().fit_transform(x)
+    return MinMaxScaler().fit_transform(cleaned) if scale_range else cleaned
 
 def gen_onehot_keys(input_size, batch_size):
     keys = [tf.Variable(tf.constant(one_hot(input_size, [i]), dtype=tf.float32),
@@ -102,10 +102,14 @@ def main():
                 keys = generate_keys(FLAGS.keytype, input_size, FLAGS.batch_size, FLAGS.seed)
             else:
                 print 'utilizing real data + N(0,I) as keys...'
-                keys = [tf.add(v, tf.random_normal(v.get_shape().as_list(), seed=FLAGS.seed*17+2*i), name="keys_%d"%i)
-                        for v, i in zip(tf.split(0, minibatch.shape[0], value), range(minibatch.shape[0]))]
-                #keys = [normalize(k) for k in keys]
-                #keys = [tf.constant()]
+                # keys = [tf.add(v, tf.random_normal(v.get_shape().as_list(), seed=FLAGS.seed*17+2*i), name="keys_%d"%i)
+                #         for v, i in zip(tf.split(0, minibatch.shape[0], value), range(minibatch.shape[0]))]
+                np.random.seed(FLAGS.seed*33 if FLAGS.seed else None)
+                keys = [tf.constant(normalize(np.expand_dims(row + np.random.randn(input_size), 0), False),
+                                    dtype=tf.float32) for row in minibatch]
+
+
+            print 'keys = ', len(keys), 'x', keys[0].get_shape().as_list()
 
             # Normalize our keys to mod 1 if specified
             if FLAGS.complex_normalize:

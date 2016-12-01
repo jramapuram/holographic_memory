@@ -12,10 +12,6 @@ class HolographicMemory:
         self.conv_func = HolographicMemory.fft_circ_conv1d if use_fft_method \
                          else HolographicMemory.circ_conv1d
 
-        self.values = tf.placeholder(tf.float32, shape=[batch_size, input_size], name="input_placeholder")
-        self.keys = tf.placeholder(tf.float32, shape=[num_models, input_size], name="key_placeholder")
-        self.memories = tf.placeholder(tf.float32, shape=[num_models, input_size], name="memory_placeholder")
-
         # Perm dimensions are: num_models * [num_features x num_features]
         # Variables are used to store the results of the random values
         # as they need to be the same during recovery
@@ -28,7 +24,6 @@ class HolographicMemory:
     '''
     def update_hebb_weights(self, A, x, gamma=0.9):
         return gamma*A + tf.matmul(tf.transpose(x), x)
-
 
     '''
     Get complex mod of a real vector
