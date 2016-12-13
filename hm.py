@@ -90,12 +90,9 @@ class HolographicMemory:
 
     @staticmethod
     def conj_real_by_complex(keys):
-        batch_size = keys.get_shape().as_list()[0]
-        input_size = keys.get_shape().as_list()[1]
-        ind_y = np.concatenate([[0], np.arange(input_size-1, 0, -1)])
-        ind_x = np.arange(batch_size)
-        indexes = [[x,y] for x in ind_x for y in ind_y]
-        return tf.reshape(tf.gather_nd(keys, indexes), [-1, input_size])
+        reversed = tf.reverse(keys, [False, True])
+        return tf.concat(1, [tf.expand_dims(keys[:, 0], 1),
+                             reversed[:, 0:-1]])
 
     '''
     Accepts the already permuted keys and the data and encodes them
