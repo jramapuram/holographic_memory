@@ -19,15 +19,23 @@ class HolographicMemory:
         #                                   trainable=False, name="perm_%d" % i)
         #                       for i in range(num_models)])
 
+        # Gather ND method
+        # np.random.seed(seed if seed else None)
+        # self.perms = [np.random.permutation(input_size) for _ in range(num_models)]
+        # print 'perms = ', len(self.perms)
+
+        # Random_Shuffle method
         np.random.seed(seed if seed else None)
-        self.perms = [np.random.permutation(input_size) for _ in range(num_models)]
+        self.perms = [np.random.randint(9999999) for _ in range(num_models)]
         print 'perms = ', len(self.perms)
+
 
     @staticmethod
     def _get_batch_perms(batch_size, perms):
         num_models = len(perms)
         input_size = perms[0].shape[0]
         perms_expanded = np.array([np.tile(p, batch_size) for p in perms]).flatten()
+        print 'perms_expanded = ', perms_expanded, '| len = ', len(perms_expanded)
         x_inds = np.array(([[i]*input_size for i in range(batch_size)]*num_models)).flatten()
         return [[x, y] for x,y in zip(x_inds, perms_expanded)]
 
@@ -203,31 +211,25 @@ class HolographicMemory:
     P: [num_models, feature_size, feature_size]
     '''
     @staticmethod
+    def perm_keys(K, P):
+        # utilizes the random_shuffle method
+        return tf.concat(0, [tf.transpose(tf.random_shuffle(tf.transpose(K), seed=s)) for s in P])
+
+
     # def perm_keys(K, P):
+    #     # utilizes the batch_matmul method
     #     num_copies = P.get_shape().as_list()[0]
     #     num_keys = K.get_shape().as_list()[0]
-    #     # packed = tf.pack([K for _ in range(num_copies)], \
-    #     #                  name="packed_keys_".join([str(kn.name).replace(":", "") for kn in K])
-    #     # return tf.concat(0, tf.unpack(tf.batch_matmul(packed, P)))
-    #     #return tf.concat(0, [tf.matmul(K, Pi) for Pi in tf.unpack(P)])
-
-    #     # Tried this for thoughts on removal of the full batch mixing
-    #     # But it looks like this isn't the case
-    #     # print 'krow = ', K[0].get_shape().as_list(), '| Pi = ', tf.unpack(P)[0].get_shape().as_list()
-    #     # return tf.concat(0, [tf.matmul(tf.expand_dims(K[i], 0), Pi)
-    #     #                      for Pi in tf.unpack(P) for i in range(num_keys)])
-
-    #     #return tf.concat(0, tf.unpack(tf.batch_matmul(tf.pack([K for _ in range(num_copies)]), P)))
-    #     # print 'packed shape = ', tf.pack([K for _ in range(num_copies)]).get_shape().as_list()
-
     #     tiled_keys = tf.tile(tf.expand_dims(K, axis=0), [num_copies, 1, 1])
     #     print 'tiled_keys =' , tiled_keys.get_shape().as_list()
     #     return tf.concat(0, tf.unpack(tf.batch_matmul(tiled_keys, P)))
 
-    def perm_keys(K, P):
-        kshp = K.get_shape().as_list()[1]
-        print 'gathered = ', tf.gather_nd(K, P).get_shape().as_list()
-        return tf.reshape(tf.gather_nd(K, P), [-1, kshp]) #tf.concat(0, [tf.reshape(tf.gather(K, p), kshp) for p in P])
+
+    # def perm_keys(K, P):
+    #     # utilizes the gather_nd method to permute
+    #     kshp = K.get_shape().as_list()[1]
+    #     print 'gathered = ', tf.gather_nd(K, P).get_shape().as_list()
+    #     return tf.reshape(tf.gather_nd(K, P), [-1, kshp]) #tf.concat(0, [tf.reshape(tf.gather(K, p), kshp) for p in P])
 
 
     '''
@@ -254,7 +256,8 @@ class HolographicMemory:
     returns: [num_models, features]
     '''
     def encode(self, v, keys) :
-        perms = self._get_batch_perms(self.batch_size, self.perms)
+        #perms = self._get_batch_perms(self.batch_size, self.perms)
+        perms = self.perms
         permed_keys = self.perm_keys(keys, perms)
         print 'enc_perms =', permed_keys.get_shape().as_list()
         return self.conv_func(v, permed_keys, self.batch_size, self.num_models)
@@ -274,12 +277,8 @@ class HolographicMemory:
 
         # re-gather keys to avoid mixing between different keys.
         # this was pretty annoying to track down!!
-        #cropped_perms = [[0, p] for _, p in self.perms] # remove first index and replace with 0
-        # cropped_perms = [self.perms[begin:end] for begin, end in zip(range(0, len(self.perms), self.input_size*self.batch_size),
-        #                                                              range(self.input_size, len(self.perms)*self.batch_size+1, self.input_size))]
-        # print 'cropped perms = ', len(cropped_perms), 'x', len(cropped_perms[0])
-        # print cropped_perms[0]
-        perms = self._get_batch_perms(1, self.perms)
+        #perms = self._get_batch_perms(1, self.perms)
+        perms = self.perms
         permed_keys = tf.concat(0, [self.perm_keys(tf.expand_dims(keys[i], 0), perms)
                                     for i in range(num_keys)])
         print 'memories = ', num_memories, \
