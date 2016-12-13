@@ -15,9 +15,8 @@ class HolographicMemory:
         # Perm dimensions are: num_models * [num_features x num_features]
         # Variables are used to store the results of the random values
         # as they need to be the same during recovery
-        # self.perms = tf.pack([tf.Variable(self.create_permutation_matrix(input_size, seed+i if seed else None),
-        #                                   trainable=False, name="perm_%d" % i)
-        #                       for i in range(num_models)])
+        self.perms = [self.create_permutation_matrix(input_size, seed+i if seed else None)
+                      for i in range(num_models)]
 
         # Gather ND method
         # np.random.seed(seed if seed else None)
@@ -25,9 +24,9 @@ class HolographicMemory:
         # print 'perms = ', len(self.perms)
 
         # Random_Shuffle method
-        np.random.seed(seed if seed else None)
-        self.perms = [np.random.randint(9999999) for _ in range(num_models)]
-        print 'perms = ', len(self.perms)
+        # np.random.seed(seed if seed else None)
+        # self.perms = [np.random.randint(9999999) for _ in range(num_models)]
+        # print 'perms = ', len(self.perms)
 
 
     @staticmethod
@@ -89,9 +88,9 @@ class HolographicMemory:
         return keys / tf.concat(1, [keys_mag, keys_mag])
 
     @staticmethod
-    def conj_real_by_complex(keys):
-        batch_size = keys.get_shape().as_list()[0]
-        input_size = keys.get_shape().as_list()[1]
+    def conj_real_by_complex(keys, kshp=None):
+        batch_size = keys.get_shape().as_list()[0] if not kshp else kshp[0]
+        input_size = keys.get_shape().as_list()[1] if not kshp else kshp[1]
         ind_y = np.concatenate([[0], np.arange(input_size-1, 0, -1)])
         ind_x = np.arange(batch_size)
         indexes = [[x,y] for x in ind_x for y in ind_y]
@@ -108,13 +107,14 @@ class HolographicMemory:
     @staticmethod
     def circ_conv1d(X, keys, batch_size, num_copies, conj=False):
         assert len(keys) > 0
-        if conj:
-            keys = HolographicMemory.conj_real_by_complex(keys)
-
         # Get our original shapes
         xshp = X.get_shape().as_list()
         kshp = keys[0].get_shape().as_list()
         print 'X : ', xshp, ' | keys : ', len(keys), ' x ', kshp
+
+        if conj:
+            kpshp = [num_copies * batch_size, xshp[1]]
+            keys = HolographicMemory.conj_real_by_complex(keys, kpshp)
 
         # Concatenate X & keys
         num_dupes = kshp[0] / batch_size
@@ -162,13 +162,16 @@ class HolographicMemory:
     '''
     @staticmethod
     def fft_circ_conv1d(X, keys, batch_size, num_copies, conj=False):
-        if conj:
-            keys = HolographicMemory.conj_real_by_complex(keys)
-
         # Get our original shapes
         xshp = X.get_shape().as_list()
         kshp = keys.get_shape().as_list()
         print 'X : ', xshp, ' | keys : ', kshp
+
+        if conj:
+            kpshp = [kshp[0], xshp[1]]
+            print 'kpshp = ', kpshp
+            keys = HolographicMemory.conj_real_by_complex(keys, kpshp)
+
 
         # duplicate out input data by the ratio: number_keys / batch_size
         # eg: |input| = [2, 784] ; |keys| = 3*[2, 784] ; (3 is the num_copies)
@@ -180,8 +183,8 @@ class HolographicMemory:
         print 'num dupes = ', num_dupes
         xcplx = HolographicMemory.split_to_complex(tf.tile(X, [num_dupes, 1]) \
                                                    if num_dupes > 1 else X)
+        kcplx = HolographicMemory.split_to_complex(keys, mid=xshp[1]/2)
         xshp = xcplx.get_shape().as_list()
-        kcplx = HolographicMemory.split_to_complex(keys)
 
         # Convolve & re-cast to a real valued function
         unsplit_func = HolographicMemory.unsplit_from_complex_ri if not conj \
@@ -211,18 +214,20 @@ class HolographicMemory:
     P: [num_models, feature_size, feature_size]
     '''
     @staticmethod
-    def perm_keys(K, P):
-        # utilizes the random_shuffle method
-        return tf.concat(0, [tf.transpose(tf.random_shuffle(tf.transpose(K), seed=s)) for s in P])
-
-
     # def perm_keys(K, P):
-    #     # utilizes the batch_matmul method
-    #     num_copies = P.get_shape().as_list()[0]
-    #     num_keys = K.get_shape().as_list()[0]
-    #     tiled_keys = tf.tile(tf.expand_dims(K, axis=0), [num_copies, 1, 1])
-    #     print 'tiled_keys =' , tiled_keys.get_shape().as_list()
-    #     return tf.concat(0, tf.unpack(tf.batch_matmul(tiled_keys, P)))
+    #     # utilizes the random_shuffle method
+    #     return tf.concat(0, [tf.transpose(tf.random_shuffle(tf.transpose(K), seed=s)) for s in P])
+
+
+    def perm_keys(K, P):
+        # utilizes the batch_matmul method
+        # num_copies = P.get_shape().as_list()[0]
+        # num_keys = K.get_shape().as_list()[0]
+        # tiled_keys = tf.tile(tf.expand_dims(K, axis=0), [num_copies, 1, 1])
+        # print 'tiled_keys =' , tiled_keys.get_shape().as_list()
+        #return tf.concat(0, tf.unpack(tf.batch_matmul(tiled_keys, P)))
+        return tf.concat(0, [tf.transpose(tf.sparse_tensor_dense_matmul(P_i, K, adjoint_b=True))
+                             for P_i in P])
 
 
     # def perm_keys(K, P):
@@ -293,32 +298,35 @@ class HolographicMemory:
     @staticmethod
     def create_permutation_matrix(input_size, seed=None):
         #return tf.random_shuffle(tf.eye(input_size), seed=seed)
-        np.random.seed(seed)
         ind = np.arange(0, input_size)
         ind_shuffled = np.copy(ind)
+        np.random.seed(seed)
         np.random.shuffle(ind)
-        retval = np.zeros([input_size, input_size])
-        for x,y in zip(ind, ind_shuffled):
-            retval[x, y] = 1
+        indices = [[x,y] for x,y in zip(ind, ind_shuffled)]
+        values = [1. for _ in range(len(indices))]
 
-        return tf.constant(retval, dtype=tf.float32)
+        return tf.sparse_reorder(tf.SparseTensor(indices, values, shape=[input_size, input_size]))
 
     '''
     Simple takes x and splits it in half --> Re{x[0:mid]} + Im{x[mid:end]}
     Works for batches in addition to single vectors
     '''
     @staticmethod
-    def split_to_complex(x):
+    def split_to_complex(x, mid=None):
         xshp = x.get_shape().as_list()
         if len(xshp) == 2:
-            assert xshp[1] % 2 == 0, \
-                "Vector is not evenly divisible into complex: %d" % xshp[1]
-            mid = xshp[1] / 2
+            if not mid:
+                assert xshp[1] % 2 == 0, \
+                    "Vector is not evenly divisible into complex: %d" % xshp[1]
+                mid = xshp[1] / 2
+
             return tf.complex(x[:, 0:mid], x[:, mid:])
         else:
-            assert xshp[0] % 2 == 0, \
-                "Vector is not evenly divisible into complex: %d" % xshp[0]
-            mid = xshp[0] / 2
+            if not mid:
+                assert xshp[0] % 2 == 0, \
+                    "Vector is not evenly divisible into complex: %d" % xshp[0]
+                mid = xshp[0] / 2
+
             return tf.complex(x[0:mid], x[mid:])
 
     '''
