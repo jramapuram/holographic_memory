@@ -25,7 +25,7 @@ flags.DEFINE_bool("complex_normalize", 0, "Normalize keys via complex mod.")
 flags.DEFINE_bool("l2_normalize_keys", 0, "Normalize keys via l2 norm.")
 flags.DEFINE_string("device", "/gpu:0", "Compute device.")
 flags.DEFINE_boolean("allow_soft_placement", False, "Soft device placement.")
-flags.DEFINE_float("device_percentage", 0.8, "Amount of memory to use on device.")
+flags.DEFINE_float("device_percentage", 0.9, "Amount of memory to use on device.")
 FLAGS = flags.FLAGS
 #################################################################################################
 
@@ -37,33 +37,28 @@ def save_fig(m, name):
 
 def gen_unif_keys(input_size, batch_size, seed):
     assert input_size % 2 == 0
-    keys = [tf.Variable(tf.random_uniform([1, input_size],
-                                          seed=seed*17+2*i if seed else None), #XXX
-                        trainable=False, name="key_%d"%i) for i in range(batch_size)]
-    return keys
+    np.random.seed(seed*17+1 if seed else None)
+    return np.random.random([batch_size, input_size])
 
 def gen_std_keys(input_size, batch_size, seed):
     assert input_size % 2 == 0
-    keys = [tf.Variable(tf.random_normal([1, input_size],
-                                         seed=seed*17+2*i if seed else None, #XXX
-                                         stddev=1.0/batch_size),
-                        trainable=False, name="key_%d"%i) for i in range(batch_size)]
-    return keys
+    np.random.seed(seed*17+1 if seed else None)
+    return np.random.randn(batch_size, input_size)
+
+# Note: This will only work if batch_size <= input_size
+def gen_onehot_keys(input_size, batch_size):
+    assert input_size >= batch_size
+    return one_hot(input_size, np.arange(input_size))
 
 def normalize(x, scale_range=True):
     if len(x.shape) == 2:
-        cleaned = (x - np.mean(x, axis=1)) / np.clip(np.std(x, axis=1), 1e-9, 1e25)
+        cleaned = (x - np.expand_dims(np.mean(x, axis=1), 1)) / np.expand_dims(np.clip(np.std(x, axis=1), 1e-9, 1e25), 1)
     elif len(x.shape) == 1:
         cleaned = (x - np.mean(x)) / np.clip(np.std(x), 1e-9, 1e25)
     else:
         raise Exception("Unknown shape provided")
 
     return MinMaxScaler().fit_transform(cleaned) if scale_range else cleaned
-
-def gen_onehot_keys(input_size, batch_size):
-    keys = [tf.Variable(tf.constant(one_hot(input_size, [i]), dtype=tf.float32),
-                        trainable=False, name="key_%d"%i) for i in range(batch_size)]
-    return keys
 
 def generate_keys(keytype, input_size, batch_size, seed):
     if keytype == 'onehot':
@@ -77,6 +72,35 @@ def generate_keys(keytype, input_size, batch_size, seed):
 
     return keys
 
+def build_model(sess, keys, values, num_copies):
+    input_size = values.get_shape().as_list()[1]
+    batch_size = values.get_shape().as_list()[0]
+
+    # initialize our holographic memory
+    memory = HolographicMemory(sess, input_size, batch_size, num_copies, seed=FLAGS.seed)
+
+    # Normalize our keys to mod 1 if specified
+    if FLAGS.complex_normalize:
+        print 'normalizing via complex abs..'
+        keys = HolographicMemory.normalize_real_by_complex_abs(keys)
+
+    # Normalize our keys using the l2 norm
+    if FLAGS.l2_normalize_keys and not FLAGS.complex_normalize:
+        print 'normalizing via l2..'
+        keys = [tf.nn.l2_normalize(k, 1) for k in keys]
+
+    # encode value with the keys
+    memories = memory.encode(values, keys)
+
+    # recover all the values from the minibatch
+    # Run list comprehension to get a list of tensors and run them in batch
+    # values_recovered = tf.concat(0, [memory.decode(memories, tf.expand_dims(keys[i], 0))
+    #                                  for i in range(keys.get_shape().as_list()[0])])
+    values_recovered = memory.decode(memories, keys)
+    print 'values_recovered shape = ', values_recovered.get_shape().as_list()
+
+    return memory, memories, values_recovered
+
 def main():
     # create a tf session and the holographic memory object
     with tf.device(FLAGS.device):
@@ -85,13 +109,18 @@ def main():
                                               gpu_options=gpu_options)) as sess:
             input_size = 784  # MNIST input size [28, 28]
 
-            # initialize our holographic memory
-            memory = HolographicMemory(sess, input_size, FLAGS.batch_size, FLAGS.num_copies, seed=FLAGS.seed)
+            # create placeholders for our items
+            keys = tf.placeholder(tf.float32, [FLAGS.batch_size, input_size], name="keys")
+            values = tf.placeholder(tf.float32, [FLAGS.batch_size, input_size], name="values")
 
             # Generate some random values & save a test sample
             #minibatch, labels = MNIST_Number(0, full_mnist).get_batch_iter(FLAGS.batch_size)
             minibatch, labels = full_mnist.train.next_batch(FLAGS.batch_size)
-            value = tf.constant(minibatch, dtype=tf.float32, name="minibatch")
+
+            # Get some info on the original data
+            print 'values to encode : ', str(minibatch.shape)
+            # for i in range(len(minibatch)):
+            #     save_fig(minibatch[i], "imgs/original_%d.png" %i)
 
             # There are num_copies x [1 x num_features] keys
             # They are generated by either:
@@ -99,56 +128,42 @@ def main():
             #     2) From a noisy version of the data
             if FLAGS.pseudokeys:
                 print 'generating pseudokeys...'
-                keys = generate_keys(FLAGS.keytype, input_size, FLAGS.batch_size, FLAGS.seed)
+                keys_host = generate_keys(FLAGS.keytype, input_size, FLAGS.batch_size, FLAGS.seed)
             else:
                 print 'utilizing real data + N(0,I) as keys...'
                 # keys = [tf.add(v, tf.random_normal(v.get_shape().as_list(), seed=FLAGS.seed*17+2*i), name="keys_%d"%i)
                 #         for v, i in zip(tf.split(0, minibatch.shape[0], value), range(minibatch.shape[0]))]
                 np.random.seed(FLAGS.seed*33 if FLAGS.seed else None)
-                keys = [tf.constant(normalize(np.expand_dims(row + np.random.randn(input_size), 0), False),
-                                    dtype=tf.float32) for row in minibatch]
+                keys_host = normalize(minibatch + np.random.randn(FLAGS.batch_size, input_size),
+                                      scale_range=False)
 
+            print 'keys = ', keys_host.shape
 
-            print 'keys = ', len(keys), 'x', keys[0].get_shape().as_list()
-
-            # Normalize our keys to mod 1 if specified
-            if FLAGS.complex_normalize:
-                print 'normalizing via complex abs..'
-                keys = HolographicMemory.normalize_real_by_complex_abs(keys)
-
-            # Normalize our keys using the l2 norm
-            if FLAGS.l2_normalize_keys and not FLAGS.complex_normalize:
-                print 'normalizing via l2..'
-                keys = [tf.nn.l2_normalize(k, 1) for k in keys]
-
+            memory_model, memories, values_recovered = build_model(sess, keys,
+                                                                   values,
+                                                                   FLAGS.num_copies)
             sess.run(tf.initialize_all_variables())
 
             # do a little validation on the keys
             # if FLAGS.complex_normalize and FLAGS.keytype != 'onehot':
-            #     memory.verify_key_mod(keys)
+            #     memory_model.verify_key_mod(keys)
 
-            # Get some info on the original data
-            print 'values to encode : ', str(minibatch.shape)
-            for i in range(len(minibatch)):
-                save_fig(minibatch[i], "imgs/original_%d.png" %i)
-
-            # encode value with the keys
-            memories = memory.encode(value, keys)
-            memories_host = sess.run(memories)
-            print 'encoded memories shape = %s' \
-                % (str(memories_host.shape))
-            #print 'em = ', memories_host
-
-            # recover all the values from the minibatch
-            # Run list comprehension to get a list of tensors and run them in batch
-            values_recovered = [tf.reduce_sum(memory.decode(memories, [keys[i]]), 0) for i in range(len(keys))]
-            values_recovered_host = sess.run(values_recovered)
+            memories_host, values_recovered_host = sess.run([memories, values_recovered],
+                                                            feed_dict={keys: keys_host,
+                                                                       values: minibatch})
+            print 'encoded memories shape = %s | recovered shape = %s' \
+                % (str(memories_host.shape), str(values_recovered_host.shape))
+            #print 'encoded memories = ', memories_host
+            #np.savetxt("encoded.csv", memories_host, delimiter=",")
+            #print 'recovered = ', values_recovered_host
 
             for val, j in zip(values_recovered_host, range(len(values_recovered_host))):
+                print 'vs = ', val.shape
                 val = normalize(val)
+                np.savetxt("recovered_%d.csv" % j, val, delimiter=",")
                 save_fig(val, "imgs/recovered_%d.png"  % j)
-                #print 'recovered value shape = ', val.shape
-                print 'recovered value [%s] = %s\n' % (val.shape, val)
+                print 'recovered value shape = ', val.shape
+                #print 'recovered value [%s] = %s\n' % (val.shape, val)
 
 if __name__ == "__main__":
     # Create our image directories
