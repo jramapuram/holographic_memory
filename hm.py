@@ -15,9 +15,9 @@ class HolographicMemory:
         # Perm dimensions are: num_models * [num_features x num_features]
         # Variables are used to store the results of the random values
         # as they need to be the same during recovery
-        # self.perms = tf.pack([tf.Variable(self.create_permutation_matrix(input_size, seed+i if seed else None),
-        #                                   trainable=False, name="perm_%d" % i)
-        #                       for i in range(num_models)])
+        self.perms = tf.pack([tf.Variable(self.create_permutation_matrix(input_size, seed+i if seed else None),
+                                          trainable=False, name="perm_%d" % i)
+                              for i in range(num_models)])
 
         # Gather ND method
         # np.random.seed(seed if seed else None)
@@ -25,9 +25,9 @@ class HolographicMemory:
         # print 'perms = ', len(self.perms)
 
         # Random_Shuffle method
-        np.random.seed(seed if seed else None)
-        self.perms = [np.random.randint(9999999) for _ in range(num_models)]
-        print 'perms = ', len(self.perms)
+        # np.random.seed(seed if seed else None)
+        # self.perms = [np.random.randint(9999999) for _ in range(num_models)]
+        # print 'perms = ', len(self.perms)
 
 
     @staticmethod
@@ -211,18 +211,18 @@ class HolographicMemory:
     P: [num_models, feature_size, feature_size]
     '''
     @staticmethod
-    def perm_keys(K, P):
-        # utilizes the random_shuffle method
-        return tf.concat(0, [tf.transpose(tf.random_shuffle(tf.transpose(K), seed=s)) for s in P])
-
-
     # def perm_keys(K, P):
-    #     # utilizes the batch_matmul method
-    #     num_copies = P.get_shape().as_list()[0]
-    #     num_keys = K.get_shape().as_list()[0]
-    #     tiled_keys = tf.tile(tf.expand_dims(K, axis=0), [num_copies, 1, 1])
-    #     print 'tiled_keys =' , tiled_keys.get_shape().as_list()
-    #     return tf.concat(0, tf.unpack(tf.batch_matmul(tiled_keys, P)))
+    #     # utilizes the random_shuffle method
+    #     return tf.concat(0, [tf.transpose(tf.random_shuffle(tf.transpose(K), seed=s)) for s in P])
+
+
+    def perm_keys(K, P):
+        # utilizes the batch_matmul method
+        num_copies = P.get_shape().as_list()[0]
+        num_keys = K.get_shape().as_list()[0]
+        tiled_keys = tf.tile(tf.expand_dims(K, axis=0), [num_copies, 1, 1])
+        print 'tiled_keys =' , tiled_keys.get_shape().as_list()
+        return tf.concat(0, tf.unpack(tf.batch_matmul(tiled_keys, P)))
 
 
     # def perm_keys(K, P):
