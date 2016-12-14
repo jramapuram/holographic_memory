@@ -10,7 +10,7 @@ class HolographicMemory:
         self.batch_size = batch_size
         self.num_models = num_models
         self.conv_func = HolographicMemory.fft_circ_conv1d if use_fft_method \
-                         else HolographicMemory.circ_conv1d
+                         else HolographicMemory.circ_conv2d
 
         # Perm dimensions are: num_models * [num_features x num_features]
         # Variables are used to store the results of the random values
@@ -103,15 +103,18 @@ class HolographicMemory:
     Returns: [num_models, num_features]
     '''
     @staticmethod
-    def circ_conv1d(X, keys, batch_size, num_copies, conj=False):
-        assert len(keys) > 0
+    def circ_conv2d(X, keys, batch_size, num_copies, conj=False):
+        raise NotImplementedError("currently only fft method works")
+
         if conj:
             keys = HolographicMemory.conj_real_by_complex(keys)
 
         # Get our original shapes
         xshp = X.get_shape().as_list()
-        kshp = keys[0].get_shape().as_list()
-        print 'X : ', xshp, ' | keys : ', len(keys), ' x ', kshp
+        kshp = keys.get_shape().as_list()
+        print 'X : ', xshp, ' | keys : ', kshp
+        if len(kshp) < 3: # handle channels for 2d
+            kshp.append(1)
 
         # Concatenate X & keys
         num_dupes = kshp[0] / batch_size
@@ -119,25 +122,21 @@ class HolographicMemory:
         xconcat = tf.tile(X, [num_dupes, 1]) \
                   if num_dupes > 1 else X
         xspshp = xconcat.get_shape().as_list()
-        print 'X_concats = ', xconcat.get_shape().as_list()
+        if len(xspshp) < 3: # handle channels for 2d
+            xspshp.append(1)
+
+        print 'X_concats = ', xspshp
 
         # The following computes all of the values individually, i.e
         # [P0k0 * x0, P0k1 * x1 + ...]
-        # Input  : [batch, in_width, in_channels]
-        # Filter : [filter_width, in_channels, out_channels]
-        # Result : [batch, out_width, out_channels]
-        conv_0 = [tf.constant(0, dtype=tf.int32), tf.zeros([1, xshp[1]])]
-        cond = lambda i, kx: tf.less(i, len(keys))
-        _update = lambda i, kx_pair: \
-                  [i+1, tf.concat(0, [kx_pair, tf.expand_dims(tf.squeeze(tf.nn.conv1d(tf.reshape(xconcat[i], [1, xshp[1], 1 if len(xshp) == 2 else xshp[0]]),
-                                                                                      tf.reshape(kconcat[i], [kshp[1], kshp[0], 1]),
-                                                                                      stride=1,
-                                                                                      padding='SAME')), 0)])]
-        _, conv = tf.while_loop(cond, _update, conv_0,
-                                shape_invariants=[conv_0[0].get_shape(),
-                                                  TensorShape([None, xshp[1]])],
-                                parallel_iterations=len(keys))
-        conv = conv[1:] # The 0th element is zeros(1, xshp[1])
+        # Input:  [batch, in_height, in_width, in_channels]
+        # Filter: [filter_height, filter_width, in_channels, out_channels]
+        # Result: [batch, in_height, in_width, in_channels]
+        conv = tf.nn.conv2d(tf.reshape(xconcat, [xspshp[0], xspshp[2], xspshp[1], 1]),
+                            tf.reshape(keys, [kshp[2], kshp[0], kshp[2], kshp[1]]),
+                            strides=[1,1,1,1],
+                            padding='VALID')
+        print 'full conv = ', conv.get_shape().as_list()
 
         # We now aggregate them as follows:
         # c0 = P0k0 * x0 + P0k1 * x1 + ... P0k_batch * x_batch
@@ -145,8 +144,8 @@ class HolographicMemory:
         #batch_size = xshp[0]
         batch_iter = min(batch_size, xshp[0]) # xspshp[0]
         conv_concat = [tf.expand_dims(tf.reduce_sum(conv[begin:end], 0), 0)
-                       for begin, end in zip(range(0, len(keys), batch_iter),
-                                             range(batch_iter, len(keys)+1, batch_iter))]
+                       for begin, end in zip(range(0, kshp[0], batch_iter),
+                                             range(batch_iter, kshp[0]+1, batch_iter))]
         print 'conv concat = ', len(conv_concat), ' x ', conv_concat[0].get_shape().as_list()
 
         # return a single concatenated  tensor:
@@ -253,11 +252,12 @@ class HolographicMemory:
     returns: [num_models, features]
     '''
     def encode(self, v, keys) :
-        #perms = self._get_batch_perms(self.batch_size, self.perms)
-        perms = self.perms
-        permed_keys = self.perm_keys(keys, perms)
+        vshp = v.get_shape().as_list()
+        permed_keys = self.perm_keys(keys, self.perms)
         print 'enc_perms =', permed_keys.get_shape().as_list()
-        return self.conv_func(v, permed_keys, self.batch_size, self.num_models)
+        return self.conv_func(v, permed_keys,
+                              vshp[0], # batch_size
+                              self.num_models)
 
     '''
     Decoders values out of memories
@@ -273,16 +273,18 @@ class HolographicMemory:
         num_keys = keys.get_shape().as_list()[0]
 
         # re-gather keys to avoid mixing between different keys.
-        # this was pretty annoying to track down!!
-        #perms = self._get_batch_perms(1, self.perms)
-        perms = self.perms
-        permed_keys = tf.concat(0, [self.perm_keys(tf.expand_dims(keys[i], 0), perms)
+        # perms = self.perms
+        # permed_keys = tf.concat(0, [self.perm_keys(tf.expand_dims(keys[i], 0), perms)
+        #                             for i in range(num_keys)])
+        perms = self.perm_keys(keys, self.perms)
+        pshp = perms.get_shape().as_list()
+        permed_keys = tf.concat(0, [tf.strided_slice(perms, [i, 0], pshp, [num_keys, 1])
                                     for i in range(num_keys)])
         print 'memories = ', num_memories, \
             '| dec_perms =', permed_keys.get_shape().as_list()
         return self.conv_func(memories, permed_keys,
-                              memories.get_shape().as_list()[0],
-                              self.num_models, conj=True)
+                       num_memories[0],
+                       self.num_models, conj=True)
 
     '''
     Helper to create an [input_size, input_size] random permutation matrix
