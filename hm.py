@@ -9,7 +9,7 @@ class HolographicMemory:
         self.sess = sess
         self.input_size = input_size
         self.num_models = num_models
-        self.complex_normalize=complex_normalize
+        self.complex_normalize = complex_normalize
         self.l2_normalize = l2_normalize
         self.conv_func = HolographicMemory.fft_circ_conv1d if use_fft_method \
                          else HolographicMemory.circ_conv1d
@@ -20,8 +20,8 @@ class HolographicMemory:
         # self.perms = tf.pack([tf.Variable(self.create_permutation_matrix(input_size, seed+i if seed else None),
         #                                   trainable=False, name="perm_%d" % i)
         #                       for i in range(num_models)])
-        self.perms = tf.pack([self.create_permutation_matrix(input_size, seed+i if seed else None)
-                              for i in range(num_models)])
+        self.perms = [self.create_permutation_matrix(input_size, seed+i if seed else None)
+                      for i in range(num_models)]
 
         # Gather ND method
         # np.random.seed(seed if seed else None)
@@ -108,8 +108,6 @@ class HolographicMemory:
     '''
     @staticmethod
     def circ_conv1d(X, keys, batch_size, num_copies, num_keys=None, conj=False):
-        raise NotImplementedError("currently only fft method works")
-
         if conj:
             keys = HolographicMemory.conj_real_by_complex(keys)
 
@@ -118,51 +116,29 @@ class HolographicMemory:
         xshp[0] = batch_size if xshp[0] is None else xshp[0]
         kshp = keys.get_shape().as_list()
         kshp[0] = num_keys if num_keys is not None else kshp[0]
+        kshp[1] = xshp[1] if kshp[1] is None else kshp[1]
         print 'X : ', xshp, ' | keys : ', kshp, ' | batch_size = ', batch_size
-
-        # if len(kshp) < 3: # handle channels for 2d
-        #     kshp.append(1)
 
         # Concatenate X & keys
         num_dupes = kshp[0] / batch_size
         print 'num dupes = ', num_dupes
-
-        # xconcat = tf.tile(X, [num_dupes, 1]) \
-        #           if num_dupes > 1 else X
-        # xspshp = xconcat.get_shape().as_list()
-        # if len(xspshp) < 3: # handle channels for 2d
-        #     xspshp.append(1)
-
-        # print 'X_concats = ', xspshp
+        xconcat = tf.tile(X, [num_dupes, 1]) \
+                  if num_dupes > 1 else X
+        xspshp = xconcat.get_shape().as_list()
+        xspshp[0] = num_keys if xspshp[0] is None else xspshp[0]
+        print 'xconcatinated : ', xspshp
 
         # The following computes all of the values individually, i.e
         # [P0k0 * x0, P0k1 * x1 + ...]
-        # Input:  [batch, in_height, in_width, in_channels]
-        # Filter: [filter_height, filter_width, in_channels, out_channels]
-        # Result: [batch, in_height, in_width, in_channels]
-
-        # conv = tf.nn.conv1d(tf.reshape(xconcat, [xspshp[0], xspshp[2], xspshp[1], 1]),
-        #                     tf.reshape(keys, [kshp[2], kshp[0], kshp[2], kshp[1]]),
-        #                     strides=[1,1,1,1],
-        #                     padding='VALID')
-        # print 'full conv = ', conv.get_shape().as_list()
-
         # Input  : [batch, in_width, in_channels]
         # Filter : [filter_width, in_channels, out_channels]
         # Result : [batch, out_width, out_channels]
-        #[1, xshp[1], 1 if len(xshp) == 2 else xshp[0]]), #xshp + [1]),
-        #xshp + [1]),#xshp + [1]),
-
-        conv = [tf.expand_dims(tf.squeeze(tf.nn.conv1d(tf.reshape(X, xshp+[1]),#[1, xshp[1], 1 if len(xshp) == 2 else xshp[0]]),
+        conv = [tf.expand_dims(tf.squeeze(tf.nn.conv1d(tf.reshape(xconcat[i], [1, xspshp[1], 1]),
                                                        tf.reshape(keys[i], [kshp[1], 1, 1]),
                                                        stride=1,
                                                        padding='SAME')), 0) for i in range(kshp[0])]
         conv = tf.concat(0, conv)
         print 'conv = ', conv.get_shape().as_list()
-
-        # C = tf.squeeze(tf.concat(0, conv), axis=[2])
-        # print 'C: ', C.get_shape().as_list()
-        # return C
 
         # We now aggregate them as follows:
         # c0 = P0k0 * x0 + P0k1 * x1 + ... P0k_batch * x_batch
@@ -191,6 +167,7 @@ class HolographicMemory:
         xshp = X.get_shape().as_list()
         kshp = keys.get_shape().as_list()
         kshp[0] = num_keys if num_keys is not None else kshp[0]
+        kshp[1] = xshp[1] if kshp[1] is None else kshp[1]
         print 'X : ', xshp, ' | keys : ', kshp, ' | batch_size = ', batch_size
 
         # duplicate out input data by the ratio: number_keys / batch_size
@@ -204,7 +181,7 @@ class HolographicMemory:
         xcplx = HolographicMemory.split_to_complex(tf.tile(X, [num_dupes, 1]) \
                                                    if num_dupes > 1 else X)
         xshp = xcplx.get_shape().as_list()
-        kcplx = HolographicMemory.split_to_complex(keys)
+        kcplx = HolographicMemory.split_to_complex(keys, kshp)
 
         # Convolve & re-cast to a real valued function
         unsplit_func = HolographicMemory.unsplit_from_complex_ri if not conj \
@@ -237,14 +214,10 @@ class HolographicMemory:
     #     return tf.concat(0, [tf.transpose(tf.random_shuffle(tf.transpose(K), seed=s)) for s in P])
 
 
-    def perm_keys(K, P):
-        # utilizes the batch_matmul method
-        num_copies = P.get_shape().as_list()[0]
-        num_keys = K.get_shape().as_list()[0]
-        tiled_keys = tf.tile(tf.expand_dims(K, axis=0), [num_copies, 1, 1])
-        print 'tiled_keys =' , tiled_keys.get_shape().as_list()
-        return tf.concat(0, tf.unpack(tf.batch_matmul(tiled_keys, P)))
-
+    def perm_keys(K, P, num_keys=None):
+        # utilizes the sparse matmul method
+        return tf.concat(0, [tf.transpose(tf.sparse_tensor_dense_matmul(P_i, K, adjoint_b=True))
+                             for P_i in P])
 
     # def perm_keys(K, P):
     #     # utilizes the gather_nd method to permute
@@ -293,7 +266,7 @@ class HolographicMemory:
     def encode(self, v, keys, batch_size=None):
         keys = self._normalize(keys)
         batch_size = v.get_shape().as_list()[0] if batch_size is None else batch_size
-        permed_keys = self.perm_keys(keys, self.perms)
+        permed_keys = self.perm_keys(keys, self.perms, num_keys=batch_size)
         print 'enc_perms = ', permed_keys.get_shape().as_list(), ' | batch_size = ', batch_size
         return self.conv_func(v, permed_keys,
                               batch_size,
@@ -314,14 +287,13 @@ class HolographicMemory:
         num_memories = memories.get_shape().as_list()
         num_memories[0] = self.num_models if num_memories[0] is None else num_memories[0]
         num_keys = keys.get_shape().as_list()[0] if num_keys is None else num_keys
+        print 'decode: numkeys = ', num_keys, ' | num_memories = ', num_memories
 
         # re-gather keys to avoid mixing between different keys.
-        # perms = self.perms
-        # permed_keys = tf.concat(0, [self.perm_keys(tf.expand_dims(keys[i], 0), perms)
-        #                             for i in range(num_keys)])
-        perms = self.perm_keys(keys, self.perms)
+        perms = self.perm_keys(keys, self.perms, num_keys=num_keys)
         pshp = perms.get_shape().as_list()
         pshp[0] = num_keys*self.num_models if pshp[0] is None else pshp[0]
+        pshp[1] = num_memories[1] if pshp[1] is None else pshp[1]
         permed_keys = tf.concat(0, [tf.strided_slice(perms, [i, 0], pshp, [num_keys, 1])
                                     for i in range(num_keys)])
         print 'memories = ', num_memories, \
@@ -338,23 +310,22 @@ class HolographicMemory:
     @staticmethod
     def create_permutation_matrix(input_size, seed=None):
         #return tf.random_shuffle(tf.eye(input_size), seed=seed)
-        np.random.seed(seed)
         ind = np.arange(0, input_size)
         ind_shuffled = np.copy(ind)
+        np.random.seed(seed)
         np.random.shuffle(ind)
-        retval = np.zeros([input_size, input_size])
-        for x,y in zip(ind, ind_shuffled):
-            retval[x, y] = 1
-
-        return tf.constant(retval, dtype=tf.float32)
+        indices = np.asarray([[x,y] for x,y in zip(ind, ind_shuffled)], dtype=np.int32)
+        values = np.ones([len(indices)], dtype=np.float32)
+        indices = indices[indices[:, 0].argsort()]
+        return tf.SparseTensor(indices, values, shape=[input_size, input_size])
 
     '''
     Simple takes x and splits it in half --> Re{x[0:mid]} + Im{x[mid:end]}
     Works for batches in addition to single vectors
     '''
     @staticmethod
-    def split_to_complex(x):
-        xshp = x.get_shape().as_list()
+    def split_to_complex(x, xshp=None):
+        xshp = x.get_shape().as_list() if xshp is None else xshp
         if len(xshp) == 2:
             assert xshp[1] % 2 == 0, \
                 "Vector is not evenly divisible into complex: %d" % xshp[1]
