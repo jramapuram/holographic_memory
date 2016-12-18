@@ -17,12 +17,13 @@ from sklearn.preprocessing import MinMaxScaler
 #################################################################################################
 flags = tf.flags
 flags.DEFINE_integer("num_copies", 3, "Number of copies to make.")
-flags.DEFINE_integer("batch_size", 2, "Number of samples to use in minibatch")
+flags.DEFINE_integer("minibatch_size", 2, "Number of samples to use in minibatch")
+flags.DEFINE_integer("batch_size", 64, "Total number of samples")
 flags.DEFINE_integer("seed", None, "Fixed seed to get reproducible results.")
 flags.DEFINE_string("keytype", "normal", "Use N(0, I) keys")
 flags.DEFINE_bool("pseudokeys", 1, "Use synthetically generated keys or [data + error] as keys")
 flags.DEFINE_bool("complex_normalize", 0, "Normalize keys via complex mod.")
-flags.DEFINE_bool("l2_normalize_keys", 0, "Normalize keys via l2 norm.")
+flags.DEFINE_bool("l2_normalize", 0, "Normalize keys via l2 norm.")
 flags.DEFINE_string("device", "/gpu:0", "Compute device.")
 flags.DEFINE_boolean("allow_soft_placement", False, "Soft device placement.")
 flags.DEFINE_float("device_percentage", 0.9, "Amount of memory to use on device.")
@@ -47,8 +48,9 @@ def gen_std_keys(input_size, batch_size, seed):
 
 # Note: This will only work if batch_size <= input_size
 def gen_onehot_keys(input_size, batch_size):
-    assert input_size >= batch_size
-    return one_hot(input_size, np.arange(input_size))
+    assert input_size >= batch_size, \
+        "current one-hot defn necessitates input_size >= batch_size"
+    return np.vstack([one_hot(input_size, [i]) for i in range(batch_size)])
 
 def normalize(x, scale_range=True):
     if len(x.shape) == 2:
@@ -72,34 +74,60 @@ def generate_keys(keytype, input_size, batch_size, seed):
 
     return keys
 
-def build_model(sess, keys, values, num_copies):
+def build_model(sess, keys, values, num_copies, batch_size=None):
     input_size = values.get_shape().as_list()[1]
-    batch_size = values.get_shape().as_list()[0]
+    batch_size = values.get_shape().as_list()[0] if batch_size is None else batch_size
 
     # initialize our holographic memory
-    memory = HolographicMemory(sess, input_size, batch_size, num_copies, seed=FLAGS.seed)
+    memory = HolographicMemory(sess, input_size, num_copies,
+                               complex_normalize=FLAGS.complex_normalize,
+                               l2_normalize=FLAGS.l2_normalize,
+                               seed=FLAGS.seed)
 
-    # Normalize our keys to mod 1 if specified
-    if FLAGS.complex_normalize:
-        print 'normalizing via complex abs..'
-        keys = HolographicMemory.normalize_real_by_complex_abs(keys)
+    print 'keys = ', keys.get_shape().as_list()
+    encoder = memory.encode(values, keys, batch_size=batch_size)
+    decoder = memory.decode(values, keys, num_keys=batch_size)
 
-    # Normalize our keys using the l2 norm
-    if FLAGS.l2_normalize_keys and not FLAGS.complex_normalize:
-        print 'normalizing via l2..'
-        keys = [tf.nn.l2_normalize(k, 1) for k in keys]
+    return memory, encoder, decoder
 
-    # encode value with the keys
-    memories = memory.encode(values, keys)
+def encode(sess, memory, encoder, values, keys, full_batch_host, keys_host, batch_size):
+    full_batch_size = full_batch_host.shape[0]
+    assert full_batch_size >= batch_size, "full batch size needs to be >= mini-batch size"
+    memories_host = np.zeros([memory.num_models, memory.input_size])
+    print 'full_batch_size = ', full_batch_size, 'minibatch_size = ', batch_size
 
-    # recover all the values from the minibatch
-    # Run list comprehension to get a list of tensors and run them in batch
-    # values_recovered = tf.concat(0, [memory.decode(memories, tf.expand_dims(keys[i], 0))
-    #                                  for i in range(keys.get_shape().as_list()[0])])
-    values_recovered = memory.decode(memories, keys)
-    print 'values_recovered shape = ', values_recovered.get_shape().as_list()
+    for begin,end in zip(range(0, full_batch_size, batch_size),
+                         range(batch_size, full_batch_size+1, batch_size)):
+        feed_dict={keys: keys_host[begin:end],
+                   values: full_batch_host[begin:end]}
 
-    return memory, memories, values_recovered
+        # encode value with the keys
+        memories_host += sess.run(encoder, feed_dict=feed_dict)
+
+    #np.savetxt("encoded.csv", memories_host, delimiter=",")
+    return memories_host
+
+
+def decode(sess, memory, decoder, values, keys, memories_host, keys_host, key_batch):
+    recovered_host = []
+    keys_size = keys_host.shape[0]  # this can be 1 or more keys
+    assert keys_size >= key_batch, "key full batch size needs to be >= key mini-batch size"
+    print 'key size = ', keys_size, 'key_batch = ', key_batch
+
+    for begin,end in zip(range(0, keys_size, key_batch),
+                         range(key_batch, keys_size+1, key_batch)):
+        #print 'b/e decode = ', begin, end, ' | key_batch = ', key_batch
+        feed_dict={keys: keys_host[begin:end],
+                   values: memories_host}
+
+        # decode values using keys and memories
+        r = sess.run(decoder, feed_dict=feed_dict)
+        recovered_host.append(r)
+
+    recovered = np.vstack(recovered_host)
+    print 'values_recovered shape = ', recovered.shape
+    return recovered
+
 
 def main():
     # create a tf session and the holographic memory object
@@ -110,11 +138,12 @@ def main():
             input_size = 784  # MNIST input size [28, 28]
 
             # create placeholders for our items
-            keys = tf.placeholder(tf.float32, [FLAGS.batch_size, input_size], name="keys")
-            values = tf.placeholder(tf.float32, [FLAGS.batch_size, input_size], name="values")
+            # FLAGS.minibatch_size
+            keys = tf.placeholder(tf.float32, [None, input_size], name="keys")
+            values = tf.placeholder(tf.float32, [None, input_size], name="values")
 
             # Generate some random values & save a test sample
-            #minibatch, labels = MNIST_Number(0, full_mnist).get_batch_iter(FLAGS.batch_size)
+            #minibatch, labels = MNIST_Number(0, full_mnist).get_batch_iter(FLAGS.minibatch_size)
             minibatch, labels = full_mnist.train.next_batch(FLAGS.batch_size)
 
             # Get some info on the original data
@@ -137,26 +166,22 @@ def main():
                 keys_host = normalize(minibatch + np.random.randn(FLAGS.batch_size, input_size),
                                       scale_range=False)
 
-            print 'keys = ', keys_host.shape
 
-            memory_model, memories, values_recovered = build_model(sess, keys,
-                                                                   values,
-                                                                   FLAGS.num_copies)
+            memory_model, encoder, decoder = build_model(sess, keys,
+                                                         values,
+                                                         FLAGS.num_copies,
+                                                         FLAGS.minibatch_size)
             sess.run(tf.initialize_all_variables())
 
             # do a little validation on the keys
             # if FLAGS.complex_normalize and FLAGS.keytype != 'onehot':
             #     memory_model.verify_key_mod(keys)
 
-            memories_host, values_recovered_host = sess.run([memories, values_recovered],
-                                                            feed_dict={keys: keys_host,
-                                                                       values: minibatch})
-            print 'encoded memories shape = %s | recovered shape = %s' \
-                % (str(memories_host.shape), str(values_recovered_host.shape))
-            #np.savetxt("encoded.csv", memories_host, delimiter=",")
-            #print 'recovered = ', values_recovered_host
+            memories_host = encode(sess, memory_model, encoder, values, keys, minibatch, keys_host, FLAGS.minibatch_size)
+            print 'memories recovered = ', memories_host.shape
+            recovered_host = decode(sess, memory_model, decoder, values, keys, memories_host, keys_host, FLAGS.minibatch_size)
 
-            for val, j in zip(values_recovered_host, range(len(values_recovered_host))):
+            for val, j in zip(recovered_host, range(len(recovered_host))):
                 print 'vs = ', val.shape
                 val = normalize(val)
                 #np.savetxt("recovered_%d.csv" % j, val, delimiter=",")

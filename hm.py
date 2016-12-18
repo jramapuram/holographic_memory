@@ -4,19 +4,23 @@ import numpy as np
 from tensorflow.python.framework.tensor_shape import TensorShape
 
 class HolographicMemory:
-    def __init__(self, sess, input_size, batch_size, num_models, seed=None, use_fft_method=True):
+    def __init__(self, sess, input_size, num_models, seed=None,
+                 complex_normalize=True, l2_normalize=False, use_fft_method=True):
         self.sess = sess
         self.input_size = input_size
-        self.batch_size = batch_size
         self.num_models = num_models
+        self.complex_normalize=complex_normalize
+        self.l2_normalize = l2_normalize
         self.conv_func = HolographicMemory.fft_circ_conv1d if use_fft_method \
-                         else HolographicMemory.circ_conv2d
+                         else HolographicMemory.circ_conv1d
 
         # Perm dimensions are: num_models * [num_features x num_features]
         # Variables are used to store the results of the random values
         # as they need to be the same during recovery
-        self.perms = tf.pack([tf.Variable(self.create_permutation_matrix(input_size, seed+i if seed else None),
-                                          trainable=False, name="perm_%d" % i)
+        # self.perms = tf.pack([tf.Variable(self.create_permutation_matrix(input_size, seed+i if seed else None),
+        #                                   trainable=False, name="perm_%d" % i)
+        #                       for i in range(num_models)])
+        self.perms = tf.pack([self.create_permutation_matrix(input_size, seed+i if seed else None)
                               for i in range(num_models)])
 
         # Gather ND method
@@ -103,7 +107,7 @@ class HolographicMemory:
     Returns: [num_models, num_features]
     '''
     @staticmethod
-    def circ_conv2d(X, keys, batch_size, num_copies, conj=False):
+    def circ_conv1d(X, keys, batch_size, num_copies, num_keys=None, conj=False):
         raise NotImplementedError("currently only fft method works")
 
         if conj:
@@ -111,38 +115,60 @@ class HolographicMemory:
 
         # Get our original shapes
         xshp = X.get_shape().as_list()
+        xshp[0] = batch_size if xshp[0] is None else xshp[0]
         kshp = keys.get_shape().as_list()
-        print 'X : ', xshp, ' | keys : ', kshp
-        if len(kshp) < 3: # handle channels for 2d
-            kshp.append(1)
+        kshp[0] = num_keys if num_keys is not None else kshp[0]
+        print 'X : ', xshp, ' | keys : ', kshp, ' | batch_size = ', batch_size
+
+        # if len(kshp) < 3: # handle channels for 2d
+        #     kshp.append(1)
 
         # Concatenate X & keys
         num_dupes = kshp[0] / batch_size
         print 'num dupes = ', num_dupes
-        xconcat = tf.tile(X, [num_dupes, 1]) \
-                  if num_dupes > 1 else X
-        xspshp = xconcat.get_shape().as_list()
-        if len(xspshp) < 3: # handle channels for 2d
-            xspshp.append(1)
 
-        print 'X_concats = ', xspshp
+        # xconcat = tf.tile(X, [num_dupes, 1]) \
+        #           if num_dupes > 1 else X
+        # xspshp = xconcat.get_shape().as_list()
+        # if len(xspshp) < 3: # handle channels for 2d
+        #     xspshp.append(1)
+
+        # print 'X_concats = ', xspshp
 
         # The following computes all of the values individually, i.e
         # [P0k0 * x0, P0k1 * x1 + ...]
         # Input:  [batch, in_height, in_width, in_channels]
         # Filter: [filter_height, filter_width, in_channels, out_channels]
         # Result: [batch, in_height, in_width, in_channels]
-        conv = tf.nn.conv2d(tf.reshape(xconcat, [xspshp[0], xspshp[2], xspshp[1], 1]),
-                            tf.reshape(keys, [kshp[2], kshp[0], kshp[2], kshp[1]]),
-                            strides=[1,1,1,1],
-                            padding='VALID')
-        print 'full conv = ', conv.get_shape().as_list()
+
+        # conv = tf.nn.conv1d(tf.reshape(xconcat, [xspshp[0], xspshp[2], xspshp[1], 1]),
+        #                     tf.reshape(keys, [kshp[2], kshp[0], kshp[2], kshp[1]]),
+        #                     strides=[1,1,1,1],
+        #                     padding='VALID')
+        # print 'full conv = ', conv.get_shape().as_list()
+
+        # Input  : [batch, in_width, in_channels]
+        # Filter : [filter_width, in_channels, out_channels]
+        # Result : [batch, out_width, out_channels]
+        #[1, xshp[1], 1 if len(xshp) == 2 else xshp[0]]), #xshp + [1]),
+        #xshp + [1]),#xshp + [1]),
+
+        conv = [tf.expand_dims(tf.squeeze(tf.nn.conv1d(tf.reshape(X, xshp+[1]),#[1, xshp[1], 1 if len(xshp) == 2 else xshp[0]]),
+                                                       tf.reshape(keys[i], [kshp[1], 1, 1]),
+                                                       stride=1,
+                                                       padding='SAME')), 0) for i in range(kshp[0])]
+        conv = tf.concat(0, conv)
+        print 'conv = ', conv.get_shape().as_list()
+
+        # C = tf.squeeze(tf.concat(0, conv), axis=[2])
+        # print 'C: ', C.get_shape().as_list()
+        # return C
 
         # We now aggregate them as follows:
         # c0 = P0k0 * x0 + P0k1 * x1 + ... P0k_batch * x_batch
         # and do that for all the c's and store separately
         #batch_size = xshp[0]
-        batch_iter = min(batch_size, xshp[0]) # xspshp[0]
+        batch_iter = min(batch_size, xshp[0]) if xshp[0] is not None else batch_size
         conv_concat = [tf.expand_dims(tf.reduce_sum(conv[begin:end], 0), 0)
                        for begin, end in zip(range(0, kshp[0], batch_iter),
                                              range(batch_iter, kshp[0]+1, batch_iter))]
@@ -157,14 +183,15 @@ class HolographicMemory:
     ffts and element-wise matrix multiplies followed by reductions
     '''
     @staticmethod
-    def fft_circ_conv1d(X, keys, batch_size, num_copies, conj=False):
+    def fft_circ_conv1d(X, keys, batch_size, num_copies, num_keys=None, conj=False):
         if conj:
             keys = HolographicMemory.conj_real_by_complex(keys)
 
         # Get our original shapes
         xshp = X.get_shape().as_list()
         kshp = keys.get_shape().as_list()
-        print 'X : ', xshp, ' | keys : ', kshp
+        kshp[0] = num_keys if num_keys is not None else kshp[0]
+        print 'X : ', xshp, ' | keys : ', kshp, ' | batch_size = ', batch_size
 
         # duplicate out input data by the ratio: number_keys / batch_size
         # eg: |input| = [2, 784] ; |keys| = 3*[2, 784] ; (3 is the num_copies)
@@ -185,11 +212,9 @@ class HolographicMemory:
         conv = unsplit_func(tf.ifft(tf.mul(tf.fft(xcplx), tf.fft(kcplx))))
         print 'full conv = ', conv.get_shape().as_list()
 
-        print 'fftx = ', tf.fft(xcplx).get_shape().as_list(), ' | fftk = ', tf.fft(kcplx).get_shape().as_list(), \
-            'xcplx = ', xcplx.get_shape().as_list(), ' | kcplx = ', kcplx.get_shape().as_list()
 
-        batch_iter = min(batch_size, xshp[0])
-        print 'batch = ', batch_size, ' | num_copies = ', num_copies, \
+        batch_iter = min(batch_size, xshp[0]) if xshp[0] is not None else batch_size
+        print 'batch = ', batch_size, ' | num_copies = ', num_copies, '| num_keys = ', num_keys, \
             '| xshp[0] = ', xshp[0], ' | len(keys) = ', kshp[0], ' | batch iter = ', batch_iter
         conv_concat = [tf.expand_dims(tf.reduce_sum(conv[begin:end], 0), 0)
                        for begin, end in zip(range(0, kshp[0], batch_iter),
@@ -242,6 +267,20 @@ class HolographicMemory:
                 else tf.zeros([num_pad])
         return tf.concat(index_to_pad, [x, zeros])
 
+    def _normalize(self, keys):
+        # Normalize our keys to mod 1 if specified
+        if self.complex_normalize:
+            print 'normalizing via complex abs..'
+            keys = HolographicMemory.normalize_real_by_complex_abs(keys)
+
+        # Normalize our keys using the l2 norm
+        if self.l2_normalize:
+            print 'normalizing via l2..'
+            keys = tf.nn.l2_normalize(keys, 1)
+
+        return keys
+
+
     '''
     Encoders some keys and values together
 
@@ -251,13 +290,15 @@ class HolographicMemory:
 
     returns: [num_models, features]
     '''
-    def encode(self, v, keys) :
-        vshp = v.get_shape().as_list()
+    def encode(self, v, keys, batch_size=None):
+        keys = self._normalize(keys)
+        batch_size = v.get_shape().as_list()[0] if batch_size is None else batch_size
         permed_keys = self.perm_keys(keys, self.perms)
-        print 'enc_perms =', permed_keys.get_shape().as_list()
+        print 'enc_perms = ', permed_keys.get_shape().as_list(), ' | batch_size = ', batch_size
         return self.conv_func(v, permed_keys,
-                              vshp[0], # batch_size
-                              self.num_models)
+                              batch_size,
+                              self.num_models,
+                              num_keys=batch_size*self.num_models)
 
     '''
     Decoders values out of memories
@@ -268,9 +309,11 @@ class HolographicMemory:
 
     returns: [num_models, features]
     '''
-    def decode(self, memories, keys):
+    def decode(self, memories, keys, num_keys=None):
+        keys = self._normalize(keys)
         num_memories = memories.get_shape().as_list()
-        num_keys = keys.get_shape().as_list()[0]
+        num_memories[0] = self.num_models if num_memories[0] is None else num_memories[0]
+        num_keys = keys.get_shape().as_list()[0] if num_keys is None else num_keys
 
         # re-gather keys to avoid mixing between different keys.
         # perms = self.perms
@@ -278,13 +321,16 @@ class HolographicMemory:
         #                             for i in range(num_keys)])
         perms = self.perm_keys(keys, self.perms)
         pshp = perms.get_shape().as_list()
+        pshp[0] = num_keys*self.num_models if pshp[0] is None else pshp[0]
         permed_keys = tf.concat(0, [tf.strided_slice(perms, [i, 0], pshp, [num_keys, 1])
                                     for i in range(num_keys)])
         print 'memories = ', num_memories, \
             '| dec_perms =', permed_keys.get_shape().as_list()
         return self.conv_func(memories, permed_keys,
-                       num_memories[0],
-                       self.num_models, conj=True)
+                              num_memories[0],
+                              self.num_models,
+                              num_keys=num_keys*self.num_models,
+                              conj=True)
 
     '''
     Helper to create an [input_size, input_size] random permutation matrix
