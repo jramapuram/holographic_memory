@@ -47,10 +47,8 @@ def gen_std_keys(input_size, batch_size, seed):
     return np.random.randn(batch_size, input_size)
 
 # Note: This will only work if batch_size <= input_size
-def gen_onehot_keys(input_size, batch_size):
-    assert input_size >= batch_size, \
-        "current one-hot defn necessitates input_size >= batch_size"
-    return np.vstack([one_hot(input_size, [i]) for i in range(batch_size)])
+def gen_onehot_keys(input_size, batch_size, targets):
+    return np.vstack([one_hot(input_size, [t]) for t in targets])
 
 def normalize(x, scale_range=True):
     if len(x.shape) == 2:
@@ -62,9 +60,10 @@ def normalize(x, scale_range=True):
 
     return MinMaxScaler().fit_transform(cleaned) if scale_range else cleaned
 
-def generate_keys(keytype, input_size, batch_size, seed):
+def generate_keys(keytype, input_size, batch_size, seed, targets=None):
     if keytype == 'onehot':
-        keys = gen_onehot_keys(input_size, batch_size)
+        assert targets is not None, "targets need to be provided for one-hot"
+        keys = gen_onehot_keys(input_size, batch_size, targets)
     elif keytype == 'normal' or 'std':
         keys = gen_std_keys(input_size, batch_size, seed)
     elif keytype == 'unif':
@@ -157,7 +156,10 @@ def main():
             #     2) From a noisy version of the data
             if FLAGS.pseudokeys:
                 print 'generating pseudokeys...'
-                keys_host = generate_keys(FLAGS.keytype, input_size, FLAGS.batch_size, FLAGS.seed)
+                keys_host = generate_keys(FLAGS.keytype, input_size,
+                                          FLAGS.batch_size,
+                                          FLAGS.seed, targets=labels)
+                print keys_host
             else:
                 print 'utilizing real data + N(0,I) as keys...'
                 # keys = [tf.add(v, tf.random_normal(v.get_shape().as_list(), seed=FLAGS.seed*17+2*i), name="keys_%d"%i)
