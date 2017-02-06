@@ -1,6 +1,7 @@
 import math
 import tensorflow as tf
 import numpy as np
+from utils import tf_mean_std_normalize
 from tensorflow.python.framework.tensor_shape import TensorShape
 
 class HolographicMemory:
@@ -145,15 +146,23 @@ class HolographicMemory:
         # and do that for all the c's and store separately
         #batch_size = xshp[0]
         batch_iter = min(batch_size, xshp[0]) if xshp[0] is not None else batch_size
-        conv_concat = [tf.expand_dims(tf.reduce_sum(conv[begin:end], 0), 0)
+        conv_concat = [tf.expand_dims(tf.reduce_mean(conv[begin:end], 0), 0)
                        for begin, end in zip(range(0, kshp[0], batch_iter),
                                              range(batch_iter, kshp[0]+1, batch_iter))]
         print 'conv concat = ', len(conv_concat), ' x ', conv_concat[0].get_shape().as_list()
 
         # return a single concatenated  tensor:
         # C = [c0; c1; ...]
+        # C = tf.concat(0, conv_concat)
+        # return (1.0 / C.get_shape().as_list()[0]) * C
         return tf.concat(0, conv_concat)
 
+    @staticmethod
+    def bound(x):
+        bound = tf.maximum(tf.sqrt(tf.mul(tf.real(x), tf.real(x)) \
+                                   + tf.mul(tf.imag(x), tf.imag(x))),
+                           1.0)
+        return tf.complex(tf.real(x) / bound, tf.imag(x) / bound)
     '''
     Does the entire operation within the frequency domain using
     ffts and element-wise matrix multiplies followed by reductions
@@ -186,21 +195,29 @@ class HolographicMemory:
         # Convolve & re-cast to a real valued function
         unsplit_func = HolographicMemory.unsplit_from_complex_ri if not conj \
                        else HolographicMemory.unsplit_from_complex_ir
-        conv = unsplit_func(tf.ifft(tf.mul(tf.fft(xcplx), tf.fft(kcplx))))
+        #fft_mul = HolographicMemory.bound(tf.mul(tf.fft(xcplx), tf.fft(kcplx)))
+        fft_mul = tf.mul(tf.fft(xcplx), tf.fft(kcplx))
+        conv = unsplit_func(tf.ifft(fft_mul))
         print 'full conv = ', conv.get_shape().as_list()
 
 
         batch_iter = min(batch_size, xshp[0]) if xshp[0] is not None else batch_size
         print 'batch = ', batch_size, ' | num_copies = ', num_copies, '| num_keys = ', num_keys, \
             '| xshp[0] = ', xshp[0], ' | len(keys) = ', kshp[0], ' | batch iter = ', batch_iter
-        conv_concat = [tf.expand_dims(tf.reduce_sum(conv[begin:end], 0), 0)
+        conv_concat = [tf.expand_dims(tf.reduce_mean(conv[begin:end], 0), 0)
                        for begin, end in zip(range(0, kshp[0], batch_iter),
                                              range(batch_iter, kshp[0]+1, batch_iter))]
         print 'conv concat = ', len(conv_concat), ' x ', conv_concat[0].get_shape().as_list()
 
         # return a single concatenated  tensor:
         # C = [c0; c1; ...]
-        return tf.concat(0, conv_concat)
+        C = tf.concat(0, conv_concat)
+
+        return C
+        #C = tf_mean_std_normalize(C)
+        #return C / tf.maximum(tf.reduce_max(C), 1e-20)
+        #return tf.nn.sigmoid(C)
+        #return tf_mean_std_normalize(C)
 
     '''
     Helper to return the product of the permutation matrices and the keys
